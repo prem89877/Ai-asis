@@ -1,0 +1,46 @@
+{
+  "file": "01-intra-state-grid.pdf",
+  "supplier_name": "Demo Hardware Pvt Ltd",
+  "supplier_gstin": "27ABCDE1234F1Z0",
+  "buyer_name": "Bright Builders",
+  "buyer_gstin": "27LMNOP4321Q1Z4",
+  "invoice_number": "DH/26-27/0412",
+  "invoice_date": "2026-09-15",
+  "place_of_supply": "Maharashtra (27)",
+  "taxable_value": 3305,
+  "discount_total": null,
+  "cgst": 297.45,
+  "sgst": 297.45,
+  "igst": null,
+  "cess": null,
+  "grand_total": 3899.9,
+  "line_items": [
+    {
+      "description": "Steel bolts M8",
+      "hsn_sac": "7318",
+      "quantity": 100,
+      "unit": "Nos",
+      "unit_price": 12.5,
+      "taxable_value": 1250,
+      "gst_rate": 18
+    },
+    {
+      "description": "Hex nuts M8",
+      "hsn_sac": "7318",
+      "quantity": 200,
+      "unit": "Nos",
+      "unit_price": 8,
+      "taxable_value": 1600,
+      "gst_rate": 18
+    },
+    {
+      "description": "Cable ties pack",
+      "hsn_sac": "3926",
+      "quantity": 10,
+      "unit": "Pkt",
+      "unit_price": 45.5,
+      "taxable_value": 455,
+      "gst_rate": 18
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "file": "04-zero-rated-and-cess.pdf",
+  "supplier_name": "Demo Beverages LLP",
+  "supplier_gstin": "29PQRST5678K1ZY",
+  "buyer_name": "Cafe Aroma",
+  "buyer_gstin": null,
+  "invoice_number": "DB/0931",
+  "invoice_date": "2026-10-05",
+  "place_of_supply": "Karnataka (29)",
+  "taxable_value": 1960,
+  "discount_total": null,
+  "cgst": 134.4,
+  "sgst": 134.4,
+  "igst": null,
+  "cess": 96,
+  "grand_total": 2324.8,
+  "line_items": [
+    {
+      "description": "Packaged drinking water 1L",
+      "hsn_sac": "2201",
+      "quantity": 50,
+      "unit": "Nos",
+      "unit_price": 20,
+      "taxable_value": 1000,
+      "gst_rate": 0
+    },
+    {
+      "description": "Aerated drink 600ml",
+      "hsn_sac": "2202",
+      "quantity": 24,
+      "unit": "Nos",
+      "unit_price": 40,
+      "taxable_value": 960,
+      "gst_rate": 28
+    }
+  ]
+}

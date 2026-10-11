@@ -1,0 +1,37 @@
+{
+  "file": "06-phone-photo-jpg.jpg",
+  "supplier_name": "Demo Pharma Distributors",
+  "supplier_gstin": "08KLMNO1357P1Z7",
+  "buyer_name": "Health Plus Chemist",
+  "buyer_gstin": null,
+  "invoice_number": "PD-5521",
+  "invoice_date": "2026-09-28",
+  "place_of_supply": "Rajasthan (08)",
+  "taxable_value": 4880,
+  "discount_total": null,
+  "cgst": 292.8,
+  "sgst": 292.8,
+  "igst": null,
+  "cess": null,
+  "grand_total": 5465.6,
+  "line_items": [
+    {
+      "description": "Paracetamol 500mg strip",
+      "hsn_sac": "3004",
+      "quantity": 200,
+      "unit": "Strip",
+      "unit_price": 18.4,
+      "taxable_value": 3680,
+      "gst_rate": null
+    },
+    {
+      "description": "ORS sachet",
+      "hsn_sac": "3004",
+      "quantity": 100,
+      "unit": "Pkt",
+      "unit_price": 12,
+      "taxable_value": 1200,
+      "gst_rate": null
+    }
+  ]
+}

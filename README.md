@@ -1,0 +1,39 @@
+# AI Asis (Phase 1)
+
+AI invoice extraction platform for Indian CAs, tax consultants, wholesalers and small businesses.
+
+**Phase 1 is the interface only.** There is no backend: authentication, upload, extraction and export are not connected. All dashboard data is labelled sample data.
+
+## Stack
+Next.js 14 (App Router), TypeScript, Tailwind CSS, Inter font (`next/font`), lucide-react icons.
+
+## Setup
+```bash
+npm install
+npm run dev        # http://localhost:3000
+npm run typecheck  # tsc --noEmit
+npm run lint
+npm run build
+```
+Note: `next/font/google` downloads Inter at build time, so the first build needs internet.
+
+## Routes
+`/` landing · `/login` · `/register` · `/dashboard` (sample-data preview)
+
+## Where to integrate later
+- `lib/auth.ts`: replace `submitAuth` with real auth.
+- `components/dashboard/UploadDropzone.tsx`: `onFilesSelected` prop for uploads.
+- `lib/sample-data.ts`: swap for API data; table/stat/activity components already take props plus `loading` and empty states.
+
+## Brand
+Primary `#2563EB` · Background `#F8FAFC` · Text `#1E293B` · Accent `#10B981` (Tailwind tokens: `brand`, `canvas`, `ink`, `success`).
+Accent green is used for icons and fills; success text uses a darker green for readable contrast.
+
+## Phase 2: auth, database, storage
+Supabase Auth (email/password, optional Google), PostgreSQL with RLS, private storage for invoice files. Setup, security notes and limits: see `docs/PHASE2_SETUP.md`. Copy `.env.example` to `.env.local` first.
+
+## Phase 3: AI extraction
+Gemini-based invoice extraction with batches, job statuses, validation, review flags, quotas and cost tracking. Setup, environment variables, limits, test results and the accuracy-evaluation method: see `docs/PHASE3_SETUP.md`. Extra server-only secrets are required (`SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`).
+
+## Phase 4: review, verification, exports
+Invoice table with search/sort/filter, side-by-side original and editable fields, GST-aware warnings, verification, and CSV/XLSX export with configurable columns. Migration, setup, test results and limits: see `docs/PHASE4_SETUP.md`. No new environment variables.

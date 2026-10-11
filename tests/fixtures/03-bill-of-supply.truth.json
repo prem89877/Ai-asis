@@ -1,0 +1,37 @@
+{
+  "file": "03-bill-of-supply.pdf",
+  "supplier_name": "Sunrise Tailoring",
+  "supplier_gstin": null,
+  "buyer_name": "R. Mehta",
+  "buyer_gstin": null,
+  "invoice_number": "117",
+  "invoice_date": "2026-09-20",
+  "place_of_supply": null,
+  "taxable_value": null,
+  "discount_total": null,
+  "cgst": null,
+  "sgst": null,
+  "igst": null,
+  "cess": null,
+  "grand_total": 850,
+  "line_items": [
+    {
+      "description": "Stitching - shirt",
+      "hsn_sac": null,
+      "quantity": 2,
+      "unit": "Pcs",
+      "unit_price": 350,
+      "taxable_value": 700,
+      "gst_rate": null
+    },
+    {
+      "description": "Alterations",
+      "hsn_sac": null,
+      "quantity": 1,
+      "unit": "Job",
+      "unit_price": 150,
+      "taxable_value": 150,
+      "gst_rate": null
+    }
+  ]
+}

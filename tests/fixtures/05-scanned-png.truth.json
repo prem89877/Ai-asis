@@ -1,0 +1,37 @@
+{
+  "file": "05-scanned-png.png",
+  "supplier_name": "Demo Textiles",
+  "supplier_gstin": "24FGHIJ2468L1ZF",
+  "buyer_name": "Kiran Garments",
+  "buyer_gstin": null,
+  "invoice_number": "T/2026/88",
+  "invoice_date": "2026-09-11",
+  "place_of_supply": "Gujarat (24)",
+  "taxable_value": 15000,
+  "discount_total": null,
+  "cgst": 375,
+  "sgst": 375,
+  "igst": null,
+  "cess": null,
+  "grand_total": 15750,
+  "line_items": [
+    {
+      "description": "Cotton fabric 40s",
+      "hsn_sac": "5208",
+      "quantity": 120,
+      "unit": "Mtr",
+      "unit_price": 95,
+      "taxable_value": 11400,
+      "gst_rate": 5
+    },
+    {
+      "description": "Polyester lining",
+      "hsn_sac": "5407",
+      "quantity": 60,
+      "unit": "Mtr",
+      "unit_price": 60,
+      "taxable_value": 3600,
+      "gst_rate": 5
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "file": "02-inter-state-discount.pdf",
+  "supplier_name": "Demo Office Supplies",
+  "supplier_gstin": "29PQRST5678K1ZY",
+  "buyer_name": "Nova Consulting LLP",
+  "buyer_gstin": "07UVWXY8765R1ZP",
+  "invoice_number": "OS-2209",
+  "invoice_date": "2026-10-02",
+  "place_of_supply": "Delhi (07)",
+  "taxable_value": 8000,
+  "discount_total": 492,
+  "cgst": null,
+  "sgst": null,
+  "igst": 1440,
+  "cess": null,
+  "grand_total": 9440,
+  "line_items": [
+    {
+      "description": "Laptop stand",
+      "hsn_sac": "9403",
+      "quantity": 3,
+      "unit": "Nos",
+      "unit_price": 1499,
+      "taxable_value": 4497,
+      "gst_rate": null
+    },
+    {
+      "description": "USB hub 7-port",
+      "hsn_sac": "8517",
+      "quantity": 5,
+      "unit": "Nos",
+      "unit_price": 799,
+      "taxable_value": 3995,
+      "gst_rate": null
+    }
+  ]
+}
