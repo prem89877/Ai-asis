@@ -3,7 +3,7 @@
 -- HOW TO RUN (scratch / local Supabase database only, never production data):
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/phase5_billing.test.sql
 --   or paste the whole file into the Supabase SQL Editor and run it once.
--- Prerequisite: all earlier migrations plus 20261013000001_phase5.sql AND phase5_part2.sql are applied.
+-- Prerequisite: all earlier migrations plus 008_billing.sql AND 009_billing_fixes.sql are applied.
 -- Everything runs in one transaction that is rolled back, so no test data is kept (plan limits changed by the
 -- tests are restored too). The last output is one row "PHASE 5 SQL TESTS PASSED". A failed check stops the script
 -- with "TEST FAILED: <name>"; then run:  rollback;

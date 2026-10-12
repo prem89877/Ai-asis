@@ -1,5 +1,5 @@
 -- AI Asis Phase 3 (1/2): new enum values.
--- Run this file ON ITS OWN, before 20261011000002_extraction.sql.
+-- Run this file ON ITS OWN, before 005_extraction.sql.
 -- A new enum value cannot be used in the same transaction that adds it, so the two steps are separate files.
 
 -- Job statuses requested for Phase 3: Queued, Processing, Needs Review, Completed, Failed.

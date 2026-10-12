@@ -1,5 +1,5 @@
 -- AI Asis Phase 3 (2/2): extraction pipeline schema.
--- Prerequisite: 20261011000001_extraction_enums.sql has been run (and committed) first.
+-- Prerequisite: 004_extraction_enums.sql has been run (and committed) first.
 --
 -- Design notes
 --  * Extraction results, jobs and usage are written ONLY by trusted server code (service_role),
