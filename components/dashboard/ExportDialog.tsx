@@ -154,7 +154,14 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
       const text = parts.join(" ");
       const href = `/api/exports/${out.id}/download`;
       setResult({ href, name: out.fileName, text, fallback: !win });
-      if (win) win.location.href = href;
+      if (win) {
+        win.location.href = href;
+        // The file arrives as a download, so the new tab itself stays blank. Close it shortly after the download has
+        // started; the browser then returns to this page. (A tab opened by a script may be closed by that script.)
+        setTimeout(() => {
+          try { win.close(); } catch { /* the browser keeps it open; nothing to do */ }
+        }, 2500);
+      }
       setBusy(false);
       onExported({ ok: true, text });
     } catch (e) {
@@ -229,7 +236,7 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
         {result && (
           <div role="status" className="space-y-3 border-t border-emerald-300 bg-success-soft p-4 text-sm text-success-ink">
             <p>{result.text}</p>
-            <p className="text-xs">{result.fallback ? "Your browser blocked the new tab. Tap the button below to download." : "The file opens in a new tab and downloads. The tab closes by itself."}</p>
+            <p className="text-xs">{result.fallback ? "Your browser blocked the new tab. Tap the button below to download." : "The file is downloading. The extra tab closes by itself and brings you back here."}</p>
             <div className="flex flex-wrap gap-2">
               {result.fallback && (
                 <a href={result.href} target="_blank" rel="noopener noreferrer" className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-white">
