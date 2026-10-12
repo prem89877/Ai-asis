@@ -6,7 +6,7 @@ import type { ExportInvoice, ExportItem } from "./columns";
 import { toCsv, type DateFormat } from "./csv";
 import { toXlsx } from "./xlsx";
 import { hasExtractedData } from "../review/status";
-import { errDetail } from "../api/debug"; // TEMP-DEBUG
+import { errDetail } from "../api/debug";
 
 export const CHUNK = 50; // ids per query, keeps URLs short
 const PAGE = 1000; // PostgREST default max rows per request
