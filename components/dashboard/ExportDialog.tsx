@@ -141,9 +141,9 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
         const raw = await res.text().catch(() => "");
         let body: { error?: string; detail?: string } = {};
         try { body = JSON.parse(raw) as typeof body; } catch { /* not JSON */ }
-        // TEMP-DEBUG: exact error (status, message, technical detail, raw body when it is not JSON)
         win?.close();
-        setError(`[${res.status}] ${body.error ?? "The export could not be created."}${body.detail ? `\nDETAIL: ${body.detail}` : ""}${!body.error && raw ? `\nRAW: ${raw.slice(0, 400)}` : ""}`);
+        // `detail` is only ever sent by a local debug server (AI_ASIS_DEBUG_ERRORS=1); production never includes it.
+        setError(`${body.error ?? "The export could not be created. Try again."}${body.detail ? `\nDETAIL: ${body.detail}` : ""}`);
         setBusy(false);
         return;
       }
@@ -164,10 +164,9 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
       }
       setBusy(false);
       onExported({ ok: true, text });
-    } catch (e) {
-      // TEMP-DEBUG: exact browser-side error
+    } catch {
       win?.close();
-      setError(`Browser error: ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`);
+      setError("Could not reach the server. Check your connection and try again.");
       setBusy(false);
     }
   }
