@@ -223,9 +223,9 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
         {result && (
           <div role="status" className="space-y-3 border-t border-emerald-300 bg-success-soft p-4 text-sm text-success-ink">
             <p>{result.text}</p>
-            <p className="text-xs">Tap the button to download the file.</p>
+            <p className="text-xs">Tap the button to download the file. It opens in a new tab and closes by itself.</p>
             <div className="flex flex-wrap gap-2">
-              <a href={result.href} className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-white">
+              <a href={result.href} target="_blank" rel="noopener noreferrer" className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-white">
                 <Download className="h-4 w-4" aria-hidden />Download {result.name}
               </a>
               <Button variant="secondary" onClick={onClose}>Done</Button>
