@@ -6,6 +6,9 @@ import { Pricing } from "@/components/landing/Pricing";
 import { Faq } from "@/components/landing/Faq";
 import { Footer } from "@/components/landing/Footer";
 
+// The pricing section reads the plans table; refresh the page at most every 5 minutes.
+export const revalidate = 300;
+
 export default function HomePage() {
   return (
     <>
