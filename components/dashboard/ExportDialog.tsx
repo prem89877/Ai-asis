@@ -230,24 +230,24 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
             <span><span className="font-semibold">Verified invoices only</span><span className="block text-xs text-ink-muted">Skips invoices nobody has verified yet.</span></span>
           </label>
 
-          {result && (
-            <div role="status" className="space-y-3 rounded-lg border border-emerald-300 bg-success-soft p-3 text-sm text-success-ink">
-              <p>{result.text}</p>
-              <p className="text-xs">If the file did not start downloading, tap the button below.</p>
-              <div className="flex flex-wrap gap-2">
-                <a href={result.url} download={result.name} className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-white">
-                  <Download className="h-4 w-4" aria-hidden />Download {result.name}
-                </a>
-                <Button variant="secondary" onClick={onClose}>Done</Button>
-              </div>
-            </div>
-          )}
           <div role="status" aria-live="polite">
             {error && <p className="whitespace-pre-wrap break-words rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
             {note && <p className="rounded-lg border border-emerald-300 bg-success-soft p-3 text-sm text-success-ink">{note}</p>}
           </div>
         </div>
 
+        {result && (
+          <div role="status" className="space-y-3 border-t border-emerald-300 bg-success-soft p-4 text-sm text-success-ink">
+            <p>{result.text}</p>
+            <p className="text-xs">If the file did not start downloading, tap the button below.</p>
+            <div className="flex flex-wrap gap-2">
+              <a href={result.url} download={result.name} className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-white">
+                <Download className="h-4 w-4" aria-hidden />Download {result.name}
+              </a>
+              <Button variant="secondary" onClick={onClose}>Done</Button>
+            </div>
+          </div>
+        )}
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-5 py-4">
           <div className="flex gap-2">
             <Button variant="secondary" onClick={savePrefs} loading={savingPrefs} disabled={busy || tooFew}>Save as default</Button>
