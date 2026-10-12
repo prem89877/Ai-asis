@@ -7,7 +7,7 @@ import { INVOICE_COLUMNS, ITEM_COLUMNS, validateColumnKeys } from "@/lib/export/
 import type { DateFormat } from "@/lib/export/csv";
 import { getAvailableProfile } from "@/lib/export/profiles";
 import { generateExport, istStamp } from "@/lib/export/run";
-import { DEBUG_ERRORS, errDetail } from "@/lib/api/debug"; // TEMP-DEBUG
+import { DEBUG_ERRORS, errDetail } from "@/lib/api/debug";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -59,14 +59,17 @@ export async function POST(request: Request) {
   if ((recent ?? 0) >= EXPORTS_PER_MINUTE) {
     return json({ error: "Too many exports in the last minute. Wait a moment and try again." }, 429, { "Retry-After": "30" });
   }
-  // TEMP-DEBUG: also report an error from the rate-limit query itself
-  if (DEBUG_ERRORS && recentErr) return json({ error: "Export check failed.", detail: `rate_limit_query: ${errDetail(recentErr)}` }, 500);
+  // If the rate-limit query itself fails, refuse (fail closed) instead of exporting without a limit.
+  if (recentErr) {
+    console.error("export_rate_limit_query_failed", { code: recentErr.code ?? null });
+    return json({ error: "Export check failed. Try again.", ...(DEBUG_ERRORS ? { detail: `rate_limit_query: ${errDetail(recentErr)}` } : {}) }, 500);
+  }
 
   // Build once here so every problem (no data, query errors) is reported now, with the exact reason.
   const spec = { format: format as "csv" | "xlsx", columns: cols.keys, itemColumns: itemCols.keys, includeItems, verifiedOnly, dateFormat, invoiceIds: ids };
   const result = await generateExport(g.supabase, firmId, spec);
   if (!result.ok) {
-    return json({ error: result.error, ...(DEBUG_ERRORS && result.detail ? { detail: result.detail } : {}) }, result.status); // TEMP-DEBUG
+    return json({ error: result.error, ...(DEBUG_ERRORS && result.detail ? { detail: result.detail } : {}) }, result.status);
   }
 
   const fileName = `ai-asis-invoices-${istStamp(new Date())}.${format}`;
@@ -86,7 +89,7 @@ export async function POST(request: Request) {
   });
   if (rec.error || !rec.data) {
     console.error("export_history_failed", { code: rec.error?.code ?? null });
-    return json({ error: "The export could not be recorded. Try again.", ...(DEBUG_ERRORS ? { detail: `record_export: ${errDetail(rec.error)}` } : {}) }, 500); // TEMP-DEBUG
+    return json({ error: "The export could not be recorded. Try again.", ...(DEBUG_ERRORS ? { detail: `record_export: ${errDetail(rec.error)}` } : {}) }, 500);
   }
 
   // The browser then downloads the file with a normal link: GET /api/exports/:id/download
