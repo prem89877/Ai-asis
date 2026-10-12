@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { DashboardLive } from "@/components/dashboard/DashboardLive";
 import { getPrimaryMembership, requireUser } from "@/lib/auth/session";
-import { getLimits } from "@/lib/extraction/config";
+import { getBillingOverview } from "@/lib/billing/server";
 import { formatDate } from "@/lib/format";
 import type { JobRow, Summary } from "@/lib/review/client-types";
 import type { Activity } from "@/lib/sample-data";
@@ -21,12 +21,12 @@ interface JobQueryRow {
 export default async function DashboardPage() {
   const { supabase, user } = await requireUser();
   const membership = await getPrimaryMembership(supabase, user.id);
-  const limits = getLimits();
 
-  const [{ data: profile }, { data: firm }, summaryRes, jobsRes, exportsRes, eventsRes] = await Promise.all([
+  const [{ data: profile }, { data: firm }, summaryRes, billing, jobsRes, exportsRes, eventsRes] = await Promise.all([
     supabase.from("profiles").select("full_name").eq("id", user.id).maybeSingle(),
     membership ? supabase.from("firms").select("name").eq("id", membership.firmId).maybeSingle() : Promise.resolve({ data: null }),
     membership ? supabase.rpc("review_summary", { p_firm_id: membership.firmId }) : Promise.resolve({ data: null, error: null }),
+    membership ? getBillingOverview(supabase, membership.firmId) : Promise.resolve(null),
     membership
       ? supabase
           .from("processing_jobs")
@@ -74,10 +74,9 @@ export default async function DashboardPage() {
       firmName={(firm as { name: string } | null)?.name ?? "Your firm"}
       summary={summary}
       summaryError={!summary && !!membership}
-      monthlyLimit={limits.monthlyLimit}
+      billing={billing}
       jobs={jobs}
       activity={activity}
-      maxBatchFiles={limits.batchMaxFiles}
     />
   );
 }
