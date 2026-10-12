@@ -1,14 +1,15 @@
 import Link from "next/link";
-import { CreditCard, FileText, LayoutDashboard, Settings } from "lucide-react";
+import { CreditCard, FileText, LayoutDashboard, Plug, Settings } from "lucide-react";
 import { Logo } from "@/components/ui/Logo";
 import { cn } from "@/lib/cn";
 
-export type DashboardNavKey = "dashboard" | "billing";
+export type DashboardNavKey = "dashboard" | "billing" | "integrations";
 
 // Invoices and Settings are placeholders from earlier phases (no page yet), so they stay non-links.
 const items = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard, href: "/dashboard" },
   { key: "invoices", label: "Invoices", icon: FileText, href: null },
+  { key: "integrations", label: "Integrations", icon: Plug, href: "/dashboard/integrations" },
   { key: "billing", label: "Billing", icon: CreditCard, href: "/dashboard/billing" },
   { key: "settings", label: "Settings", icon: Settings, href: null },
 ] as const;
