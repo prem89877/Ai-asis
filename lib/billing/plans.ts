@@ -24,17 +24,24 @@ export const FALLBACK_PLANS: PlanInfo[] = [
   },
 ];
 
-function rupees(paise: number): string {
-  return `₹${(paise / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+function money(paise: number, currency: string): string {
+  const amount = paise / 100;
+  if (currency === "INR") return `₹${amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+  try {
+    return amount.toLocaleString("en-IN", { style: "currency", currency, maximumFractionDigits: 2 });
+  } catch {
+    return `${currency} ${amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+  }
 }
 
-// "Free", "₹799", or "₹1,499 – ₹2,999" for a range. Prices are stored in paise.
-export function formatPlanPrice(plan: Pick<PlanInfo, "price_paise" | "price_max_paise">): string {
+// "Free", "₹799", or "₹1,499 – ₹2,999" for a range. Prices are stored in paise. Currency defaults to INR.
+export function formatPlanPrice(plan: Pick<PlanInfo, "price_paise" | "price_max_paise"> & { currency?: string }): string {
+  const currency = plan.currency ?? "INR";
   if (plan.price_paise === 0) return "Free";
   if (plan.price_max_paise !== null && plan.price_max_paise > plan.price_paise) {
-    return `${rupees(plan.price_paise)} – ${rupees(plan.price_max_paise)}`;
+    return `${money(plan.price_paise, currency)} – ${money(plan.price_max_paise, currency)}`;
   }
-  return rupees(plan.price_paise);
+  return money(plan.price_paise, currency);
 }
 
 export type ChangeKind = "current" | "upgrade" | "downgrade";
@@ -48,4 +55,21 @@ export function changeKind(current: Pick<PlanInfo, "code" | "sort_order">, targe
 export function usagePercent(used: number, limit: number): number {
   if (limit <= 0) return used > 0 ? 100 : 0;
   return Math.min(100, Math.max(0, Math.round((used / limit) * 100)));
+}
+
+export type UsageLevel = "ok" | "warning" | "full";
+
+// "warning" from 80% of the quota, "full" at 100%. Exact integer maths, so 79.6% is not rounded up to a warning.
+export function usageLevel(used: number, limit: number): UsageLevel {
+  if (limit <= 0) return "full";
+  if (used >= limit) return "full";
+  if (used * 100 >= limit * 80) return "warning";
+  return "ok";
+}
+
+// The plan's own numbers (invoices per month, files per upload) are always shown from the numeric columns.
+// Feature lines that only repeat those numbers are dropped, so editing a limit in SQL can never leave stale text on screen.
+const LIMIT_LINE = /\b(invoices?|files?|documents?)\b.*\b(per|a|each|every)\b.*\b(month|upload|batch)\b/i;
+export function displayFeatures(plan: Pick<PlanInfo, "features">): string[] {
+  return (Array.isArray(plan.features) ? plan.features : []).filter((f) => typeof f === "string" && f.trim() !== "" && !LIMIT_LINE.test(f));
 }
