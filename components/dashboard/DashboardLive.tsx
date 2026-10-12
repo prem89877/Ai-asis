@@ -340,7 +340,7 @@ export function DashboardLive({ displayName, firmName, summary: initialSummary, 
           invoiceIds={Array.from(selected)}
           onClose={() => setExporting(false)}
           onExported={(m) => {
-            setExporting(false);
+            // The dialog stays open so the person can tap the download link again if the browser blocked the first one.
             setMessage(m);
             refreshAll();
           }}

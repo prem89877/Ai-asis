@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Download, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { DEFAULT_COLUMNS, DEFAULT_ITEM_COLUMNS, INVOICE_COLUMNS, ITEM_COLUMNS } from "@/lib/export/columns";
@@ -71,6 +71,11 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
   const [savingPrefs, setSavingPrefs] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  // The finished file stays available as a real link: browsers (especially on Android) can block a second automatic
+  // download, but they never block a link the person taps themselves.
+  const [result, setResult] = useState<{ url: string; name: string; text: string } | null>(null);
+  const urlRef = useRef<string | null>(null);
+  useEffect(() => () => { if (urlRef.current) URL.revokeObjectURL(urlRef.current); }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -124,6 +129,8 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
     setBusy(true);
     setError(null);
     setNote(null);
+    setResult(null);
+    if (urlRef.current) { URL.revokeObjectURL(urlRef.current); urlRef.current = null; }
     try {
       const res = await fetch("/api/exports", {
         method: "POST",
@@ -146,18 +153,21 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
       const unverified = Number(res.headers.get("X-Export-Unverified") ?? 0);
       const histErr = res.headers.get("X-Export-History-Error"); // TEMP-DEBUG
       const url = URL.createObjectURL(blob);
+      urlRef.current = url;
       const a = document.createElement("a");
       a.href = url;
       a.download = name;
       document.body.appendChild(a);
-      a.click();
+      a.click(); // may be blocked by the browser on repeat downloads; the link below always works
       a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 10_000);
       const parts = [`${name} created with ${count} invoice${count === 1 ? "" : "s"}.`];
       if (skipped > 0) parts.push(`${skipped} skipped (not extracted yet${verifiedOnly ? " or not verified" : ""}).`);
       if (unverified > 0) parts.push(`${unverified} not yet verified. Review them before using the figures.`);
       if (histErr) parts.push(`(history not saved: ${histErr})`); // TEMP-DEBUG
-      onExported({ ok: true, text: parts.join(" ") });
+      const text = parts.join(" ");
+      setResult({ url, name, text });
+      setBusy(false);
+      onExported({ ok: true, text });
     } catch (e) {
       // TEMP-DEBUG: exact browser-side error
       setError(`Browser error: ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`);
@@ -220,6 +230,18 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
             <span><span className="font-semibold">Verified invoices only</span><span className="block text-xs text-ink-muted">Skips invoices nobody has verified yet.</span></span>
           </label>
 
+          {result && (
+            <div role="status" className="space-y-3 rounded-lg border border-emerald-300 bg-success-soft p-3 text-sm text-success-ink">
+              <p>{result.text}</p>
+              <p className="text-xs">If the file did not start downloading, tap the button below.</p>
+              <div className="flex flex-wrap gap-2">
+                <a href={result.url} download={result.name} className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-white">
+                  <Download className="h-4 w-4" aria-hidden />Download {result.name}
+                </a>
+                <Button variant="secondary" onClick={onClose}>Done</Button>
+              </div>
+            </div>
+          )}
           <div role="status" aria-live="polite">
             {error && <p className="whitespace-pre-wrap break-words rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
             {note && <p className="rounded-lg border border-emerald-300 bg-success-soft p-3 text-sm text-success-ink">{note}</p>}
