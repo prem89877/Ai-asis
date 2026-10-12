@@ -23,3 +23,11 @@ export function formatInr(v: number | string | null | undefined): string {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "";
 }
+
+const dayOnly = new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeZone: "Asia/Kolkata" });
+
+// An instant shown as a calendar date in IST, for example a billing period boundary: "12 Nov 2026".
+export function formatDayIST(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : dayOnly.format(d);
+}
