@@ -73,7 +73,7 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
   const [note, setNote] = useState<string | null>(null);
   // The finished export is a normal link to the server (GET /api/exports/:id/download). A link the person taps is always
   // a normal download. Script-made blob downloads were blocked by some Android browsers after the first one.
-  const [result, setResult] = useState<{ href: string; name: string; text: string } | null>(null);
+  const [result, setResult] = useState<{ href: string; name: string; text: string; fallback: boolean } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -124,6 +124,9 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
   }
 
   async function run() {
+    // The new tab must be opened right inside the tap (before any await), otherwise popup blockers stop it.
+    // Each download then happens in a fresh tab, which browsers do not throttle. The tab is pointed at the file below.
+    const win = window.open("", "_blank");
     setBusy(true);
     setError(null);
     setNote(null);
@@ -139,6 +142,7 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
         let body: { error?: string; detail?: string } = {};
         try { body = JSON.parse(raw) as typeof body; } catch { /* not JSON */ }
         // TEMP-DEBUG: exact error (status, message, technical detail, raw body when it is not JSON)
+        win?.close();
         setError(`[${res.status}] ${body.error ?? "The export could not be created."}${body.detail ? `\nDETAIL: ${body.detail}` : ""}${!body.error && raw ? `\nRAW: ${raw.slice(0, 400)}` : ""}`);
         setBusy(false);
         return;
@@ -149,11 +153,13 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
       if (out.unverified > 0) parts.push(`${out.unverified} not yet verified. Review them before using the figures.`);
       const text = parts.join(" ");
       const href = `/api/exports/${out.id}/download`;
-      setResult({ href, name: out.fileName, text });
+      setResult({ href, name: out.fileName, text, fallback: !win });
+      if (win) win.location.href = href;
       setBusy(false);
       onExported({ ok: true, text });
     } catch (e) {
       // TEMP-DEBUG: exact browser-side error
+      win?.close();
       setError(`Browser error: ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`);
       setBusy(false);
     }
@@ -223,11 +229,13 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
         {result && (
           <div role="status" className="space-y-3 border-t border-emerald-300 bg-success-soft p-4 text-sm text-success-ink">
             <p>{result.text}</p>
-            <p className="text-xs">Tap the button to download the file. It opens in a new tab and closes by itself.</p>
+            <p className="text-xs">{result.fallback ? "Your browser blocked the new tab. Tap the button below to download." : "The file opens in a new tab and downloads. The tab closes by itself."}</p>
             <div className="flex flex-wrap gap-2">
-              <a href={result.href} target="_blank" rel="noopener noreferrer" className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-white">
+              {result.fallback && (
+                <a href={result.href} target="_blank" rel="noopener noreferrer" className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-white">
                 <Download className="h-4 w-4" aria-hidden />Download {result.name}
               </a>
+              )}
               <Button variant="secondary" onClick={onClose}>Done</Button>
             </div>
           </div>
