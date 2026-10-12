@@ -1,7 +1,8 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const PROTECTED = ["/dashboard", "/reset-password"];
+// "/dashboard" already covers every sub-route; /dashboard/billing is listed so the billing page is protected on purpose.
+const PROTECTED = ["/dashboard", "/dashboard/billing", "/reset-password"];
 const AUTH_PAGES = ["/login", "/register", "/forgot-password"];
 
 function matches(path: string, bases: string[]): boolean {
