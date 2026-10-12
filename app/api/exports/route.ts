@@ -3,15 +3,10 @@ import { readJsonBody } from "@/lib/api/body";
 import { guard } from "@/lib/api/guard";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { UUID_RE } from "@/lib/invoices/validation";
-import { buildTables } from "@/lib/export/build";
-import {
-  INVOICE_COLUMNS, ITEM_COLUMNS, validateColumnKeys,
-  type ExportInvoice, type ExportItem,
-} from "@/lib/export/columns";
-import { toCsv, type DateFormat } from "@/lib/export/csv";
+import { INVOICE_COLUMNS, ITEM_COLUMNS, validateColumnKeys } from "@/lib/export/columns";
+import type { DateFormat } from "@/lib/export/csv";
 import { getAvailableProfile } from "@/lib/export/profiles";
-import { toXlsx } from "@/lib/export/xlsx";
-import { hasExtractedData } from "@/lib/review/status";
+import { generateExport, istStamp } from "@/lib/export/run";
 import { DEBUG_ERRORS, errDetail } from "@/lib/api/debug"; // TEMP-DEBUG
 
 export const runtime = "nodejs";
@@ -19,18 +14,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const MAX_INVOICES = 500;
-const CHUNK = 50; // ids per query, keeps URLs short
-const PAGE = 1000; // PostgREST default max rows per request
 const EXPORTS_PER_MINUTE = 10;
-
-const INVOICE_SELECT =
-  "id, original_filename, status, created_at, vendor_name, vendor_gstin, buyer_name, buyer_gstin, invoice_number, invoice_date, place_of_supply, currency, document_type, taxable_amount, discount_amount, cgst_amount, sgst_amount, igst_amount, cess_amount, tax_total, total_amount, confidence, review_flags, verified_at";
-const ITEM_SELECT = "invoice_id, position, description, hsn_code, quantity, unit, unit_price, discount_amount, taxable_amount, gst_rate, gst_amount, line_total";
-
-function istStamp(d: Date): string {
-  const s = new Date(d.getTime() + 5.5 * 3600 * 1000).toISOString();
-  return `${s.slice(0, 10).replace(/-/g, "")}-${s.slice(11, 19).replace(/:/g, "")}`; // includes seconds so repeat exports never share a name
-}
 
 // Builds a real CSV or XLSX file from the selected invoices and returns it as a download.
 // Authorization: session + firm membership; only invoices of the user's own firm are read (explicit firm_id filter on top of RLS).
@@ -78,92 +62,35 @@ export async function POST(request: Request) {
   // TEMP-DEBUG: also report an error from the rate-limit query itself
   if (DEBUG_ERRORS && recentErr) return json({ error: "Export check failed.", detail: `rate_limit_query: ${errDetail(recentErr)}` }, 500);
 
-  try {
-    // 1. Invoices of THIS firm only.
-    const invoices: ExportInvoice[] = [];
-    for (let i = 0; i < ids.length; i += CHUNK) {
-      const { data, error } = await g.supabase
-        .from("invoice_review_list")
-        .select(INVOICE_SELECT)
-        .eq("firm_id", firmId)
-        .in("id", ids.slice(i, i + CHUNK));
-      if (error) throw new Error(`invoice_query_failed: ${errDetail(error)}`);
-      invoices.push(...((data ?? []) as unknown as ExportInvoice[]));
-    }
-    const eligible = invoices.filter((inv) => hasExtractedData(inv.status) && (!verifiedOnly || inv.status === "verified"));
-    const skipped = ids.length - eligible.length;
-    if (eligible.length === 0) {
-      return json({ error: verifiedOnly ? "None of the selected invoices are verified." : "None of the selected invoices have extracted data to export yet." }, 422);
-    }
-
-    // 2. Items, only when asked for.
-    const items = new Map<string, ExportItem[]>();
-    if (includeItems) {
-      const eligibleIds = eligible.map((e) => e.id);
-      for (let i = 0; i < eligibleIds.length; i += CHUNK) {
-        const chunk = eligibleIds.slice(i, i + CHUNK);
-        for (let from = 0; ; from += PAGE) {
-          const { data, error } = await g.supabase
-            .from("line_items")
-            .select(ITEM_SELECT)
-            .eq("firm_id", firmId)
-            .in("invoice_id", chunk)
-            .order("invoice_id", { ascending: true })
-            .order("position", { ascending: true })
-            .range(from, from + PAGE - 1);
-          if (error) throw new Error(`item_query_failed: ${errDetail(error)}`);
-          for (const it of (data ?? []) as unknown as ExportItem[]) {
-            const list = items.get(it.invoice_id);
-            if (list) list.push(it);
-            else items.set(it.invoice_id, [it]);
-          }
-          if ((data ?? []).length < PAGE) break;
-        }
-      }
-    }
-
-    // 3. Build the file.
-    const tables = buildTables(eligible, items, { format, columns: cols.keys, itemColumns: itemCols.keys, includeItems });
-    const now = new Date();
-    const bytes = format === "xlsx" ? toXlsx(tables, dateFormat, now) : toCsv(tables[0], dateFormat);
-    const fileName = `ai-asis-invoices-${istStamp(now)}.${format}`;
-
-    // 4. History. A failure here must not lose the file the user asked for, but it is logged.
-    let exportId: string | null = null;
-    const rec = await admin.rpc("record_export", {
-      p_firm_id: firmId,
-      p_user_id: g.user.id,
-      p_format: format,
-      p_profile: profile.id,
-      p_invoice_ids: eligible.map((e) => e.id),
-      p_skipped: skipped,
-      p_column_keys: cols.keys,
-      p_include_items: includeItems,
-      p_file_name: fileName,
-    });
-    if (rec.error) console.error("export_history_failed", { code: rec.error.code ?? null, detail: DEBUG_ERRORS ? errDetail(rec.error) : undefined });
-    else exportId = rec.data as string;
-
-    // A plain ArrayBuffer is accepted as a body by every runtime and TypeScript version.
-    const body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-    return new Response(body, {
-      headers: {
-        "Content-Type": format === "xlsx" ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="${fileName}"`,
-        "Cache-Control": "private, no-store",
-        "X-Content-Type-Options": "nosniff",
-        "X-Export-Count": String(eligible.length),
-        "X-Export-Skipped": String(skipped),
-        "X-Export-Unverified": String(eligible.filter((e) => e.status !== "verified").length),
-        "X-Export-Recorded": exportId ? "1" : "0",
-        ...(DEBUG_ERRORS && rec.error ? { "X-Export-History-Error": errDetail(rec.error).replace(/[^\x20-\x7e]/g, " ").slice(0, 300) } : {}), // TEMP-DEBUG
-        "Access-Control-Expose-Headers": "X-Export-Count, X-Export-Skipped, X-Export-Unverified, X-Export-Recorded, X-Export-History-Error, Content-Disposition",
-      },
-    });
-  } catch (err) {
-    console.error("export_failed", { name: err instanceof Error ? err.message : "unknown" });
-    return json({ error: "The export could not be created. Try again.", ...(DEBUG_ERRORS ? { detail: errDetail(err) } : {}) }, 500); // TEMP-DEBUG
+  // Build once here so every problem (no data, query errors) is reported now, with the exact reason.
+  const spec = { format: format as "csv" | "xlsx", columns: cols.keys, itemColumns: itemCols.keys, includeItems, verifiedOnly, dateFormat, invoiceIds: ids };
+  const result = await generateExport(g.supabase, firmId, spec);
+  if (!result.ok) {
+    return json({ error: result.error, ...(DEBUG_ERRORS && result.detail ? { detail: result.detail } : {}) }, result.status); // TEMP-DEBUG
   }
+
+  const fileName = `ai-asis-invoices-${istStamp(new Date())}.${format}`;
+  const rec = await admin.rpc("record_export", {
+    p_firm_id: firmId,
+    p_user_id: g.user.id,
+    p_format: format,
+    p_profile: profile.id,
+    p_invoice_ids: result.eligibleIds,
+    p_skipped: result.skipped,
+    p_column_keys: cols.keys,
+    p_include_items: includeItems,
+    p_file_name: fileName,
+    p_item_columns: itemCols.keys,
+    p_date_format: dateFormat,
+    p_verified_only: verifiedOnly,
+  });
+  if (rec.error || !rec.data) {
+    console.error("export_history_failed", { code: rec.error?.code ?? null });
+    return json({ error: "The export could not be recorded. Try again.", ...(DEBUG_ERRORS ? { detail: `record_export: ${errDetail(rec.error)}` } : {}) }, 500); // TEMP-DEBUG
+  }
+
+  // The browser then downloads the file with a normal link: GET /api/exports/:id/download
+  return json({ id: rec.data as string, fileName, count: result.count, skipped: result.skipped, unverified: result.unverified });
 }
 
 // Recent export history for the firm (who, when, how many). Files are not stored, only this record.

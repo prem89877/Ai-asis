@@ -4,7 +4,7 @@ Phase 4 turns extracted invoices into reviewed, exportable records. Nothing is v
 
 ## 1. Setup
 
-1. Run the new migration (after the five earlier ones): `supabase/migrations/20261012000001_review_export.sql`. One file, no enum changes, can run in one go.
+1. Run the new migrations (after the five earlier ones), in order: `20261012000001_review_export.sql`, then `20261012000002_export_redownload.sql`. No enum changes, each can run in one go.
 2. No new environment variables. `SUPABASE_SERVICE_ROLE_KEY` (Phase 3) is used by the save and export routes.
 3. `npm install && npm run typecheck && npm run lint && npm run build && npm test`
 4. Scratch database only: `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/phase4_review_export.test.sql` (last row `PHASE 4 SQL TESTS PASSED`).
@@ -54,7 +54,7 @@ The rate list is a hint, not law: GST rates change by notification, so an unlist
 
 ## 5. Exports
 
-- `POST /api/exports` returns the file directly. Up to 500 invoices per export, 10 exports per firm per minute. Only invoices of your firm with extracted data are included; others are counted as skipped. Unverified invoices are included unless "Verified only" is on, and are marked in the Review Status column.
+- `POST /api/exports` validates and records the export and returns an id; the browser then downloads the file from `GET /api/exports/:id/download` with a normal link (script-made blob downloads were blocked by some Android browsers after the first one). The file is rebuilt from the saved request, so it reflects the current invoice values. Up to 500 invoices per export, 10 exports per firm per minute. Only invoices of your firm with extracted data are included; others are counted as skipped. Unverified invoices are included unless "Verified only" is on, and are marked in the Review Status column.
 - Order of rows: invoice date, invoice number (natural order), upload time.
 - **CSV**: UTF-8 with BOM, CRLF, plain decimals (no thousands separators), dates as `2026-09-15` or `15/09/2026`, timestamps in IST. Text cells starting with `= + - @` get a leading apostrophe so a spreadsheet cannot run them as formulas.
 - **XLSX** (built in `lib/export/xlsx.ts`, no dependency): real date cells, `#,##0.00` amounts, GSTIN/invoice number/HSN/ids as text (leading zeros kept), frozen styled header row, filters, line items on a second sheet "Line items". Text is stored as strings and never evaluated.

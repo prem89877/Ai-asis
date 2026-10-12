@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, Download, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { DEFAULT_COLUMNS, DEFAULT_ITEM_COLUMNS, INVOICE_COLUMNS, ITEM_COLUMNS } from "@/lib/export/columns";
@@ -71,11 +71,9 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
   const [savingPrefs, setSavingPrefs] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  // The finished file stays available as a real link: browsers (especially on Android) can block a second automatic
-  // download, but they never block a link the person taps themselves.
-  const [result, setResult] = useState<{ url: string; name: string; text: string } | null>(null);
-  const urlRef = useRef<string | null>(null);
-  useEffect(() => () => { if (urlRef.current) URL.revokeObjectURL(urlRef.current); }, []);
+  // The finished export is a normal link to the server (GET /api/exports/:id/download). A link the person taps is always
+  // a normal download. Script-made blob downloads were blocked by some Android browsers after the first one.
+  const [result, setResult] = useState<{ href: string; name: string; text: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -130,7 +128,6 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
     setError(null);
     setNote(null);
     setResult(null);
-    if (urlRef.current) { URL.revokeObjectURL(urlRef.current); urlRef.current = null; }
     try {
       const res = await fetch("/api/exports", {
         method: "POST",
@@ -146,30 +143,15 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
         setBusy(false);
         return;
       }
-      const blob = await res.blob();
-      const name = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "")?.[1] ?? `invoices.${format}`;
-      const count = Number(res.headers.get("X-Export-Count") ?? 0);
-      const skipped = Number(res.headers.get("X-Export-Skipped") ?? 0);
-      const unverified = Number(res.headers.get("X-Export-Unverified") ?? 0);
-      const histErr = res.headers.get("X-Export-History-Error"); // TEMP-DEBUG
-      const url = URL.createObjectURL(blob);
-      urlRef.current = url;
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = name;
-      document.body.appendChild(a);
-      a.click(); // may be blocked by the browser on repeat downloads; the link below always works
-      a.remove();
-      const parts = [`${name} created with ${count} invoice${count === 1 ? "" : "s"}.`];
-      if (skipped > 0) parts.push(`${skipped} skipped (not extracted yet${verifiedOnly ? " or not verified" : ""}).`);
-      if (unverified > 0) parts.push(`${unverified} not yet verified. Review them before using the figures.`);
-      if (histErr) parts.push(`(history not saved: ${histErr})`); // TEMP-DEBUG
+      const out = (await res.json()) as { id: string; fileName: string; count: number; skipped: number; unverified: number };
+      const parts = [`${out.fileName} is ready with ${out.count} invoice${out.count === 1 ? "" : "s"}.`];
+      if (out.skipped > 0) parts.push(`${out.skipped} skipped (not extracted yet${verifiedOnly ? " or not verified" : ""}).`);
+      if (out.unverified > 0) parts.push(`${out.unverified} not yet verified. Review them before using the figures.`);
       const text = parts.join(" ");
-      setResult({ url, name, text });
+      const href = `/api/exports/${out.id}/download`;
+      setResult({ href, name: out.fileName, text });
       setBusy(false);
-      // Workaround: some Android browsers only allow the first download per page load. Reloading after every export
-      // makes the next export behave like a first one. The short delay lets the download start before the page reloads.
-      setTimeout(() => window.location.reload(), 2500);
+      onExported({ ok: true, text });
     } catch (e) {
       // TEMP-DEBUG: exact browser-side error
       setError(`Browser error: ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`);
@@ -241,9 +223,9 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
         {result && (
           <div role="status" className="space-y-3 border-t border-emerald-300 bg-success-soft p-4 text-sm text-success-ink">
             <p>{result.text}</p>
-            <p className="text-xs">The page will reload in a moment so the next export works. Your selection is cleared by the reload.</p>
+            <p className="text-xs">Tap the button to download the file.</p>
             <div className="flex flex-wrap gap-2">
-              <a href={result.url} download={result.name} className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-white">
+              <a href={result.href} className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-white">
                 <Download className="h-4 w-4" aria-hidden />Download {result.name}
               </a>
               <Button variant="secondary" onClick={onClose}>Done</Button>
