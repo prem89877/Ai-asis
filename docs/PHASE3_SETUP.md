@@ -24,8 +24,8 @@ Phase 3 adds a working extraction pipeline: upload PDF/JPG/PNG invoices (single 
 ## 3. Setup
 
 1. **Migrations** (Supabase SQL Editor or `supabase db push`). Run the new files **one at a time**, in this order, after the three Phase 2 files:
-   1. `20261011000001_extraction_enums.sql` (adds enum values; must be committed before the next file uses them)
-   2. `20261011000002_extraction.sql`
+   1. `004_extraction_enums.sql` (adds enum values; must be committed before the next file uses them)
+   2. `005_extraction.sql`
 2. **Environment variables**: copy the new block of `.env.example` into `.env.local` and into Vercel (Production and Preview). All Phase 3 variables are server-only.
 3. `npm install && npm run typecheck && npm run lint && npm run build && npm test`
 4. **Database tests** (scratch/local database only): `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/phase3_extraction.test.sql`. The last row must read `PHASE 3 SQL TESTS PASSED`. Everything runs in a transaction that is rolled back.

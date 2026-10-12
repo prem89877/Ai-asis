@@ -17,7 +17,7 @@
 
 ## Setup
 
-1. Run the migration `supabase/migrations/20261014000001_phase6_integrations.sql` (after the earlier ones).
+1. Run the migration `supabase/migrations/010_integrations.sql` (after the earlier ones).
 2. Generate the encryption key and add the variables from `.env.example` (section "Phase 6 Part 1") in Vercel. `SUPABASE_SERVICE_ROLE_KEY` must already be set.
 3. **Google**: Cloud Console, enable *Google Sheets API*, create an OAuth client (Web). Redirect URI: `https://YOUR-DOMAIN/api/integrations/oauth/google_sheets/callback` (add `http://localhost:3000/...` for local). Consent screen scopes: `openid`, `email`, `.../auth/spreadsheets`. While the app is in *Testing*, only listed test users can connect, and refresh tokens expire after 7 days. For real customers the `spreadsheets` scope is *sensitive*, so Google's verification is required. A narrower design (`drive.file` + Google Picker) avoids that but is not built.
 4. **Microsoft**: Entra admin centre, new registration, platform *Web*, redirect URI `https://YOUR-DOMAIN/api/integrations/oauth/microsoft_excel/callback`. API permissions (delegated, Microsoft Graph): `Files.ReadWrite`, `offline_access`, `openid`, `profile`, `email`. Create a client secret (it expires; note the date). Some work tenants block user consent and need an admin to approve.
@@ -60,7 +60,7 @@ Limitations: the party and all ledger names must already exist in Tally with exa
 ## Not done / open
 
 * Real end-to-end runs against Google, Microsoft and Tally (need your credentials and a Tally install).
-* Running the migration and RLS checks on a database; a SQL test file for Phase 6 was not written.
+* Running the migration and RLS checks on a database; SQL test files for Phase 6 now exist (`supabase/tests/phase6_integrations.test.sql`) but have not been run.
 * `npm install`, `tsc`, `next build`, lint.
 * Line-item sync, Google Picker / `drive.file` option, automatic scheduled retries (retry is "press Sync again").
-* The TEMP-DEBUG error detail from earlier phases (`lib/api/debug.ts`, `DEBUG_ERRORS = true`) is still on; switch it off before production.
+* (Done in Phase 6 Part 2) The TEMP-DEBUG error detail is now off in every production build; see `docs/PHASE6_PART2_RELEASE.md`.

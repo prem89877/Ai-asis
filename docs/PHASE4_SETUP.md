@@ -4,7 +4,7 @@ Phase 4 turns extracted invoices into reviewed, exportable records. Nothing is v
 
 ## 1. Setup
 
-1. Run the new migrations (after the five earlier ones), in order: `20261012000001_review_export.sql`, then `20261012000002_export_redownload.sql`. No enum changes, each can run in one go.
+1. Run the new migrations (after the five earlier ones), in order: `006_review_export.sql`, then `007_export_redownload.sql`. No enum changes, each can run in one go.
 2. No new environment variables. `SUPABASE_SERVICE_ROLE_KEY` (Phase 3) is used by the save and export routes.
 3. `npm install && npm run typecheck && npm run lint && npm run build && npm test`
 4. Scratch database only: `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/phase4_review_export.test.sql` (last row `PHASE 4 SQL TESTS PASSED`).

@@ -5,7 +5,7 @@ Phase 5 Part 1 added the database side (plans, subscriptions, quota ledger, plan
 ## 1. Setup
 
 1. Run the new migration after the earlier ones (SQL editor, in this order):
-   `20261013000001_phase5.sql` (Part 1, already applied) then **`phase5_part2.sql`** (new, two small fixes, safe to run once).
+   `008_billing.sql` (Part 1, already applied) then **`009_billing_fixes.sql`** (new, two small fixes, safe to run once).
 2. New environment variable (optional, testing only): `BILLING_ALLOW_UNPAID_UPGRADES`. Leave it unset or `false`. See section 7.
 3. `SUPABASE_SERVICE_ROLE_KEY` (Phase 3) is used by the plan-change and enqueue routes. Nothing else is needed.
 4. `npm install && npm run typecheck && npm run lint && npm run build && npm test`
@@ -72,7 +72,7 @@ Notes: a feature line that only repeats a number ("300 invoices per month", "Up 
 - A failure that is not the invoice's fault does not use quota: `provider_unavailable`, `provider_timeout`, `provider_rate_limited`, `provider_auth`, `provider_model_unavailable`, `stale_timeout`, `internal_error`, `invoice_removed`, and cancelled jobs. The unit is released.
 - A failure caused by the invoice (unreadable file, `invalid_model_output`, not an invoice, and so on) consumes the unit.
 - **A retry of the same invoice in the same period never uses a second unit.** If the first run did billable work the unit stays consumed and the retry is free; if the first run released its unit, the retry takes one again.
-- Deleting an invoice does not return quota (the ledger has no link to the invoice). Exception: an invoice deleted while its job was still `queued` (the AI never started) releases its unit. After `phase5_part2.sql`, an invoice deleted while its job was `processing` stays consumed.
+- Deleting an invoice does not return quota (the ledger has no link to the invoice). Exception: an invoice deleted while its job was still `queued` (the AI never started) releases its unit. After `009_billing_fixes.sql`, an invoice deleted while its job was `processing` stays consumed.
 - Runs per invoice are still limited by `EXTRACTION_MAX_RUNS_PER_INVOICE`.
 
 ## 5. Upgrade and downgrade rules
@@ -87,8 +87,8 @@ Notes: a feature line that only repeats a number ("300 invoices per month", "Up 
 
 | # | Problem found | Fix |
 |---|---|---|
-| 1 | `roll_subscription_period` took the firm-wide advisory lock on every call. `billing_overview` calls it on every dashboard load and every 5-second poll, so the dashboard queued behind extraction claims. | `phase5_part2.sql`: return early, without a lock, while the period is still running. Rollover logic unchanged. |
-| 2 | Deleting an invoice while its job was `processing` released the quota unit although the AI call had started and may be billed. | `phase5_part2.sql`: only a `queued` job releases; a `processing` job is settled as consumed. |
+| 1 | `roll_subscription_period` took the firm-wide advisory lock on every call. `billing_overview` calls it on every dashboard load and every 5-second poll, so the dashboard queued behind extraction claims. | `009_billing_fixes.sql`: return early, without a lock, while the period is still running. Rollover logic unchanged. |
+| 2 | Deleting an invoice while its job was `processing` released the quota unit although the AI call had started and may be billed. | `009_billing_fixes.sql`: only a `queued` job releases; a `processing` job is settled as consumed. |
 | 3 | `allowUnpaidUpgrades` ignored the flag only when `VERCEL_ENV=production`. A self-hosted production build (no `VERCEL_ENV`) would have honoured it. | `lib/billing/flags.ts`: also ignored when `NODE_ENV=production` and `VERCEL_ENV` is unset. It now works only with `next dev` and on Vercel Preview. Moved to its own file so it can be unit tested. |
 | 4 | The dashboard quota panel counted every job of the calendar month (`month_jobs`: retries and free failures included), so it disagreed with the real quota. The summary route and dashboard page still used `EXTRACTION_MONTHLY_LIMIT` and `EXTRACTION_BATCH_MAX_FILES`. | Quota and batch limit now come from `billing_overview` in `app/dashboard/page.tsx`, `/api/review/summary`, `DashboardLive` and `UsagePanel`. |
 | 5 | `formatPlanPrice` ignored the plan's `currency` column. | Non-INR plans are formatted in their own currency. |
