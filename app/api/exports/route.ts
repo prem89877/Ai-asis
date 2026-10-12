@@ -12,6 +12,7 @@ import { toCsv, type DateFormat } from "@/lib/export/csv";
 import { getAvailableProfile } from "@/lib/export/profiles";
 import { toXlsx } from "@/lib/export/xlsx";
 import { hasExtractedData } from "@/lib/review/status";
+import { DEBUG_ERRORS, errDetail } from "@/lib/api/debug"; // TEMP-DEBUG
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -70,10 +71,12 @@ export async function POST(request: Request) {
 
   // Simple per-firm rate limit, from export history.
   const since = new Date(Date.now() - 60_000).toISOString();
-  const { count: recent } = await g.supabase.from("export_history").select("id", { count: "exact", head: true }).eq("firm_id", firmId).gte("created_at", since);
+  const { count: recent, error: recentErr } = await g.supabase.from("export_history").select("id", { count: "exact", head: true }).eq("firm_id", firmId).gte("created_at", since);
   if ((recent ?? 0) >= EXPORTS_PER_MINUTE) {
     return json({ error: "Too many exports in the last minute. Wait a moment and try again." }, 429, { "Retry-After": "30" });
   }
+  // TEMP-DEBUG: also report an error from the rate-limit query itself
+  if (DEBUG_ERRORS && recentErr) return json({ error: "Export check failed.", detail: `rate_limit_query: ${errDetail(recentErr)}` }, 500);
 
   try {
     // 1. Invoices of THIS firm only.
@@ -84,7 +87,7 @@ export async function POST(request: Request) {
         .select(INVOICE_SELECT)
         .eq("firm_id", firmId)
         .in("id", ids.slice(i, i + CHUNK));
-      if (error) throw new Error("invoice_query_failed");
+      if (error) throw new Error(`invoice_query_failed: ${errDetail(error)}`);
       invoices.push(...((data ?? []) as unknown as ExportInvoice[]));
     }
     const eligible = invoices.filter((inv) => hasExtractedData(inv.status) && (!verifiedOnly || inv.status === "verified"));
@@ -108,7 +111,7 @@ export async function POST(request: Request) {
             .order("invoice_id", { ascending: true })
             .order("position", { ascending: true })
             .range(from, from + PAGE - 1);
-          if (error) throw new Error("item_query_failed");
+          if (error) throw new Error(`item_query_failed: ${errDetail(error)}`);
           for (const it of (data ?? []) as unknown as ExportItem[]) {
             const list = items.get(it.invoice_id);
             if (list) list.push(it);
@@ -138,7 +141,7 @@ export async function POST(request: Request) {
       p_include_items: includeItems,
       p_file_name: fileName,
     });
-    if (rec.error) console.error("export_history_failed", { code: rec.error.code ?? null });
+    if (rec.error) console.error("export_history_failed", { code: rec.error.code ?? null, detail: DEBUG_ERRORS ? errDetail(rec.error) : undefined });
     else exportId = rec.data as string;
 
     // A plain ArrayBuffer is accepted as a body by every runtime and TypeScript version.
@@ -153,12 +156,13 @@ export async function POST(request: Request) {
         "X-Export-Skipped": String(skipped),
         "X-Export-Unverified": String(eligible.filter((e) => e.status !== "verified").length),
         "X-Export-Recorded": exportId ? "1" : "0",
-        "Access-Control-Expose-Headers": "X-Export-Count, X-Export-Skipped, X-Export-Unverified, X-Export-Recorded, Content-Disposition",
+        ...(DEBUG_ERRORS && rec.error ? { "X-Export-History-Error": errDetail(rec.error).replace(/[^\x20-\x7e]/g, " ").slice(0, 300) } : {}), // TEMP-DEBUG
+        "Access-Control-Expose-Headers": "X-Export-Count, X-Export-Skipped, X-Export-Unverified, X-Export-Recorded, X-Export-History-Error, Content-Disposition",
       },
     });
   } catch (err) {
     console.error("export_failed", { name: err instanceof Error ? err.message : "unknown" });
-    return json({ error: "The export could not be created. Try again." }, 500);
+    return json({ error: "The export could not be created. Try again.", ...(DEBUG_ERRORS ? { detail: errDetail(err) } : {}) }, 500); // TEMP-DEBUG
   }
 }
 
