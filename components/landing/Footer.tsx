@@ -10,9 +10,9 @@ export function Footer() {
           <p className="mt-2 text-sm text-ink-muted">AI invoice extraction for Indian accounting workflows.</p>
         </div>
         <nav aria-label="Footer" className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-ink-muted">
-          <a href="#features" className="hover:text-ink">Features</a>
-          <a href="#pricing" className="hover:text-ink">Pricing</a>
-          <a href="#faq" className="hover:text-ink">FAQ</a>
+          <Link href="/#features" className="hover:text-ink">Features</Link>
+          <Link href="/pricing" className="hover:text-ink">Pricing</Link>
+          <Link href="/#faq" className="hover:text-ink">FAQ</Link>
           <Link href="/login" className="hover:text-ink">Log in</Link>
         </nav>
       </div>
