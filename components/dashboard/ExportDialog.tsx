@@ -131,8 +131,11 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
         body: JSON.stringify({ format, profile: "standard", invoiceIds, columns, itemColumns: effectiveItemColumns, includeItems, verifiedOnly, dateFormat }),
       });
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setError(body.error ?? "The export could not be created.");
+        const raw = await res.text().catch(() => "");
+        let body: { error?: string; detail?: string } = {};
+        try { body = JSON.parse(raw) as typeof body; } catch { /* not JSON */ }
+        // TEMP-DEBUG: exact error (status, message, technical detail, raw body when it is not JSON)
+        setError(`[${res.status}] ${body.error ?? "The export could not be created."}${body.detail ? `\nDETAIL: ${body.detail}` : ""}${!body.error && raw ? `\nRAW: ${raw.slice(0, 400)}` : ""}`);
         setBusy(false);
         return;
       }
@@ -141,6 +144,7 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
       const count = Number(res.headers.get("X-Export-Count") ?? 0);
       const skipped = Number(res.headers.get("X-Export-Skipped") ?? 0);
       const unverified = Number(res.headers.get("X-Export-Unverified") ?? 0);
+      const histErr = res.headers.get("X-Export-History-Error"); // TEMP-DEBUG
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -152,9 +156,11 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
       const parts = [`${name} created with ${count} invoice${count === 1 ? "" : "s"}.`];
       if (skipped > 0) parts.push(`${skipped} skipped (not extracted yet${verifiedOnly ? " or not verified" : ""}).`);
       if (unverified > 0) parts.push(`${unverified} not yet verified. Review them before using the figures.`);
+      if (histErr) parts.push(`(history not saved: ${histErr})`); // TEMP-DEBUG
       onExported({ ok: true, text: parts.join(" ") });
-    } catch {
-      setError("Network error. The export was not created.");
+    } catch (e) {
+      // TEMP-DEBUG: exact browser-side error
+      setError(`Browser error: ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`);
       setBusy(false);
     }
   }
@@ -215,7 +221,7 @@ export function ExportDialog({ invoiceIds, onClose, onExported }: Props) {
           </label>
 
           <div role="status" aria-live="polite">
-            {error && <p className="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
+            {error && <p className="whitespace-pre-wrap break-words rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
             {note && <p className="rounded-lg border border-emerald-300 bg-success-soft p-3 text-sm text-success-ink">{note}</p>}
           </div>
         </div>
