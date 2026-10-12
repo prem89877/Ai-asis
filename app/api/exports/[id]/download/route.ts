@@ -2,7 +2,7 @@ import { json } from "@/lib/api/json";
 import { guard } from "@/lib/api/guard";
 import { UUID_RE } from "@/lib/invoices/validation";
 import { generateExport } from "@/lib/export/run";
-import { DEBUG_ERRORS } from "@/lib/api/debug"; // TEMP-DEBUG
+import { DEBUG_ERRORS } from "@/lib/api/debug";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,7 +34,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
     dateFormat: h.date_format,
     invoiceIds: h.invoice_ids,
   });
-  if (!result.ok) return json({ error: result.error, ...(DEBUG_ERRORS && result.detail ? { detail: result.detail } : {}) }, result.status); // TEMP-DEBUG
+  if (!result.ok) return json({ error: result.error, ...(DEBUG_ERRORS && result.detail ? { detail: result.detail } : {}) }, result.status);
 
   const name = (h.file_name ?? `ai-asis-invoices.${h.format}`).replace(/[^A-Za-z0-9._-]/g, "_");
   // A plain ArrayBuffer is accepted as a body by every runtime and TypeScript version.
