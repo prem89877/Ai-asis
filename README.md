@@ -37,3 +37,6 @@ Gemini-based invoice extraction with batches, job statuses, validation, review f
 
 ## Phase 4: review, verification, exports
 Invoice table with search/sort/filter, side-by-side original and editable fields, GST-aware warnings, verification, and CSV/XLSX export with configurable columns. Migration, setup, test results and limits: see `docs/PHASE4_SETUP.md`. No new environment variables.
+
+## Phase 5: plans, quota and billing screens
+Plans and prices live in the `plans` table (change them with SQL). Pricing page (`/pricing`), Billing page (`/dashboard/billing`), plan-based invoice quota and batch limit on the dashboard, upgrade and downgrade rules. **Online payment is not connected yet**: paid upgrades wait for a payment phase. Migrations (`20261013000001_phase5.sql`, then `phase5_part2.sql`), setup, plan table, quota rules, tests and the Phase 6 checklist: see `docs/PHASE5_SETUP.md`. New optional variable: `BILLING_ALLOW_UNPAID_UPGRADES` (testing only, never in production).
