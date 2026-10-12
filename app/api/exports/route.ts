@@ -29,7 +29,7 @@ const ITEM_SELECT = "invoice_id, position, description, hsn_code, quantity, unit
 
 function istStamp(d: Date): string {
   const s = new Date(d.getTime() + 5.5 * 3600 * 1000).toISOString();
-  return `${s.slice(0, 10).replace(/-/g, "")}-${s.slice(11, 16).replace(":", "")}`;
+  return `${s.slice(0, 10).replace(/-/g, "")}-${s.slice(11, 19).replace(/:/g, "")}`; // includes seconds so repeat exports never share a name
 }
 
 // Builds a real CSV or XLSX file from the selected invoices and returns it as a download.
