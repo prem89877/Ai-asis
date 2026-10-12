@@ -2,14 +2,17 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { FileText, LayoutDashboard, LogOut, Settings } from "lucide-react";
-import { Logo } from "@/components/ui/Logo";
+import Link from "next/link";
+import { LogOut } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import { cn } from "@/lib/cn";
 import { signOutAction } from "@/lib/auth/actions";
 import { MAX_UPLOAD_MB } from "@/lib/invoices/validation";
 import type { Activity, Stat } from "@/lib/sample-data";
 import type { JobRow, Summary } from "@/lib/review/client-types";
+import type { BillingOverview } from "@/lib/billing/types";
+import { describeEnqueue } from "@/lib/billing/notices";
+import { DashboardSidebar } from "./DashboardSidebar";
+import { QuotaBanner } from "./QuotaBanner";
 import { StatCards } from "./StatCards";
 import { RecentActivity } from "./RecentActivity";
 import { UploadDropzone } from "./UploadDropzone";
@@ -24,32 +27,33 @@ interface DashboardLiveProps {
   /** Counts and usage loaded on the server. null = could not be loaded (shown as an error, never as zeros). */
   summary: Summary | null;
   summaryError: boolean;
-  monthlyLimit: number;
+  /** Plan, status and quota from the server (billing_overview). null = could not be loaded. Display only: the server enforces every limit. */
+  billing: BillingOverview | null;
   jobs: JobRow[];
   activity: Activity[];
-  /** Server-side batch limit, passed down so the UI can warn early. The server enforces it. */
-  maxBatchFiles: number;
+}
+
+interface Message {
+  ok: boolean;
+  text: string;
+  /** show a link to Billing */
+  upgrade?: boolean;
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const EXTRACT_CONCURRENCY = 2;
 
-const nav = [
-  { label: "Dashboard", icon: LayoutDashboard, current: true },
-  { label: "Invoices", icon: FileText, current: false },
-  { label: "Settings", icon: Settings, current: false },
-];
-
-export function DashboardLive({ displayName, firmName, summary: initialSummary, summaryError: initialSummaryError, monthlyLimit, jobs, activity, maxBatchFiles }: DashboardLiveProps) {
+export function DashboardLive({ displayName, firmName, summary: initialSummary, summaryError: initialSummaryError, billing: initialBilling, jobs, activity }: DashboardLiveProps) {
   const router = useRouter();
   const [uploading, setUploading] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [viewId, setViewId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [message, setMessage] = useState<Message | null>(null);
 
   const [summary, setSummary] = useState<Summary | null>(initialSummary);
   const [summaryError, setSummaryError] = useState(initialSummaryError);
+  const [billing, setBilling] = useState<BillingOverview | null>(initialBilling);
   const [refreshKey, setRefreshKey] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
@@ -59,14 +63,16 @@ export function DashboardLive({ displayName, firmName, summary: initialSummary, 
   useEffect(() => {
     setSummary(initialSummary);
     setSummaryError(initialSummaryError);
-  }, [initialSummary, initialSummaryError]);
+    setBilling(initialBilling);
+  }, [initialSummary, initialSummaryError, initialBilling]);
 
   const reloadSummary = useCallback(async () => {
     try {
       const res = await fetch("/api/review/summary", { cache: "no-store" });
-      const body = (await res.json()) as { summary?: Summary };
+      const body = (await res.json()) as { summary?: Summary; billing?: BillingOverview | null };
       if (res.ok && body.summary) {
         setSummary(body.summary);
+        setBilling(body.billing ?? null);
         setSummaryError(false);
       } else setSummaryError(true);
     } catch {
@@ -115,7 +121,7 @@ export function DashboardLive({ displayName, firmName, summary: initialSummary, 
     return { ok: false, error: "The server is busy. Use Extract to try again." };
   }
 
-  async function processIds(ids: string[]) {
+  async function processIds(ids: string[], notice?: { text: string; upgrade: boolean }) {
     const queue = [...ids];
     const tally = { completed: 0, needs_review: 0, failed: 0 };
     const errors: string[] = [];
@@ -133,13 +139,14 @@ export function DashboardLive({ displayName, firmName, summary: initialSummary, 
     };
     await Promise.all(Array.from({ length: Math.min(EXTRACT_CONCURRENCY, ids.length) }, worker));
     const summary = `Extraction finished: ${tally.completed} completed, ${tally.needs_review} need review, ${tally.failed} failed. AI-extracted data is not verified.`;
-    setMessage({ ok: tally.failed === 0, text: [summary, ...Array.from(new Set(errors))].join(" ") });
+    setMessage({ ok: tally.failed === 0 && !notice, text: [summary, ...Array.from(new Set(errors)), ...(notice ? [notice.text] : [])].join(" "), upgrade: notice?.upgrade });
   }
 
   async function uploadFiles(files: File[]) {
     if (files.length === 0) return;
-    if (files.length > maxBatchFiles) {
-      setMessage({ ok: false, text: `You can upload up to ${maxBatchFiles} files at a time.` });
+    // Early hint only. The server checks the plan's batch limit again and the database enforces it.
+    if (billing && files.length > billing.plan.batch_max_files) {
+      setMessage({ ok: false, text: `Your ${billing.plan.name} plan allows up to ${billing.plan.batch_max_files} files at a time.`, upgrade: true });
       return;
     }
     setUploading(true);
@@ -148,7 +155,7 @@ export function DashboardLive({ displayName, firmName, summary: initialSummary, 
     const batch = await postJson("/api/invoices/batches", { fileCount: files.length }).catch(() => null);
     if (!batch || !batch.res.ok) {
       setUploading(false);
-      setMessage({ ok: false, text: (batch?.data.error as string | undefined) ?? "Network error. Try again." });
+      setMessage({ ok: false, text: (batch?.data.error as string | undefined) ?? "Network error. Try again.", upgrade: batch?.data.code === "subscription_inactive" || batch?.data.code === "batch_limit" });
       return;
     }
     const batchId = batch.data.batchId as string;
@@ -183,15 +190,16 @@ export function DashboardLive({ displayName, firmName, summary: initialSummary, 
     setExtracting(true);
     try {
       const queued = await postJson("/api/invoices/enqueue", { invoiceIds: uploadedIds });
+      const notice = describeEnqueue(queued.res.status, queued.data, uploadedIds.length);
       if (!queued.res.ok) {
-        setMessage({ ok: false, text: [`${uploadedIds.length} uploaded.`, (queued.data.error as string | undefined) ?? "Could not queue extraction.", ...errors].join(" ") });
+        setMessage({ ok: false, text: [notice.text, ...errors].join(" "), upgrade: notice.upgrade });
         refreshAll();
         return;
       }
       const ids = ((queued.data.enqueued ?? []) as { invoiceId: string }[]).map((e) => e.invoiceId);
       refreshAll();
-      await processIds(ids);
-      if (errors.length > 0) setMessage((m) => ({ ok: false, text: [m?.text ?? "", ...errors].join(" ") }));
+      await processIds(ids, notice.text ? notice : undefined);
+      if (errors.length > 0) setMessage((m) => ({ ok: false, text: [m?.text ?? "", ...errors].join(" "), upgrade: m?.upgrade }));
     } catch {
       setMessage({ ok: false, text: "Network error while queuing extraction." });
     } finally {
@@ -212,7 +220,9 @@ export function DashboardLive({ displayName, firmName, summary: initialSummary, 
         if (!queued.res.ok || enq.length === 0) {
           const skipped = (queued.data.skipped ?? []) as { reason: string }[];
           const reason = skipped[0]?.reason === "max_runs_reached" ? "This invoice has reached its retry limit." : undefined;
-          setMessage({ ok: false, text: (queued.data.error as string | undefined) ?? reason ?? "This invoice cannot be queued right now." });
+          const code = queued.data.code;
+          const stays = code === "quota_exceeded" || code === "subscription_inactive" ? ' The invoice stays "Uploaded" and can be processed after you upgrade or when the next period starts.' : "";
+          setMessage({ ok: false, text: `${(queued.data.error as string | undefined) ?? reason ?? "This invoice cannot be queued right now."}${stays}`, upgrade: code === "quota_exceeded" || code === "subscription_inactive" });
           return;
         }
         refreshAll();
@@ -263,17 +273,7 @@ export function DashboardLive({ displayName, firmName, summary: initialSummary, 
 
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[240px_1fr]">
-      <aside className="border-b border-slate-200 bg-white p-4 lg:border-b-0 lg:border-r">
-        <Logo />
-        <nav aria-label="Dashboard" className="mt-4 flex gap-1 overflow-x-auto lg:flex-col">
-          {nav.map(({ label, icon: Icon, current }) => (
-            <span key={label} aria-current={current ? "page" : undefined} className={cn("flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium", current ? "bg-brand-soft text-brand" : "text-ink-muted")}>
-              <Icon className="h-4 w-4" aria-hidden />
-              {label}
-            </span>
-          ))}
-        </nav>
-      </aside>
+      <DashboardSidebar current="dashboard" />
 
       <main className="p-4 sm:p-6 lg:p-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -291,6 +291,7 @@ export function DashboardLive({ displayName, firmName, summary: initialSummary, 
           {message && (
             <p className={message.ok ? "rounded-lg border border-emerald-300 bg-success-soft p-3 text-sm text-success-ink" : "rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800"}>
               {message.text}
+              {message.upgrade && <> <Link href="/dashboard/billing" className="font-semibold underline">Upgrade plan</Link></>}
             </p>
           )}
         </div>
@@ -302,6 +303,7 @@ export function DashboardLive({ displayName, firmName, summary: initialSummary, 
               <Button variant="secondary" onClick={() => void reloadSummary()}>Try again</Button>
             </div>
           )}
+          <QuotaBanner billing={billing} />
           <StatCards stats={stats} />
           <div className="grid gap-6 xl:grid-cols-[2fr_1fr]">
             <InvoiceReviewTable
@@ -318,8 +320,8 @@ export function DashboardLive({ displayName, firmName, summary: initialSummary, 
               onPolled={reloadSummary}
             />
             <div className="space-y-6">
-              <UploadDropzone onFilesSelected={uploadFiles} busy={uploading || extracting} hint={`PDF, JPG or PNG, up to ${MAX_UPLOAD_MB} MB each, ${maxBatchFiles} files per batch. AI-extracted data must be reviewed before use.`} />
-              <UsagePanel summary={summary} monthlyLimit={monthlyLimit} jobs={jobs} />
+              <UploadDropzone onFilesSelected={uploadFiles} busy={uploading || extracting} hint={`PDF, JPG or PNG, up to ${MAX_UPLOAD_MB} MB each${billing ? `, ${billing.plan.batch_max_files} files per upload on your ${billing.plan.name} plan` : ""}. AI-extracted data must be reviewed before use.`} />
+              <UsagePanel summary={summary} billing={billing} jobs={jobs} />
               <RecentActivity items={activity} />
             </div>
           </div>
