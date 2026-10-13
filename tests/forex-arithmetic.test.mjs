@@ -4,7 +4,7 @@ import { normalizeExtraction } from "../lib/extraction/normalize.ts";
 import { runChecks, outcomeFor } from "../lib/extraction/checks.ts";
 import { validateModelOutput } from "../lib/extraction/schema.ts";
 import { suggestGstinFixes } from "../lib/extraction/gstin.ts";
-import { lineSteps, isForeign } from "../lib/extraction/arithmetic.ts";
+import { lineSteps, isForeign, checkLineItems } from "../lib/extraction/arithmetic.ts";
 import { runExtraction } from "../lib/extraction/pipeline.ts";
 import { computeReviewFlags } from "../lib/review/flags.ts";
 import { HEADER_COLUMNS } from "../lib/review/fields.ts";
@@ -198,4 +198,50 @@ test("USD export invoice, two agreeing readings: completed, exchange rate used",
   assert.equal(r.outcome, "completed", JSON.stringify(saved[0]?.extracted.review_flags.map((x) => [x.code, x.severity, x.field])));
   assert.equal(saved[0].extracted.currency, "USD");
   assert.deepEqual(arith(saved[0].extracted.review_flags), []);
+});
+
+// ---- Discount: percentage vs flat amount ---------------------------------------------------------------------------------
+// Level 6 case: 5 x 1200 USD, discount "5" means 5% -> 5700 USD -> 475,950.00 INR at 83.50 (NOT 6000 - 5).
+const pct1 = (o = {}) => line1({ discount: f(5), taxable_value: f(475950), tax_amount: f(85671), line_total: f(561621), ...o });
+const usdPct = (over = {}) => usd({ line_items: [pct1(), line2()], taxable_value: f(526050), igst: f(94689), cess: f(5260.5), grand_total: f(5260.5 + 94689 + 526050), ...over });
+
+test("lineSteps: percent vs flat discount", () => {
+  assert.deepEqual(lineSteps(5, 1200, 5, 83.5, "PERCENT"), { gross: 6000, net: 5700, taxable: 475950 });
+  assert.deepEqual(lineSteps(5, 1200, 5, 83.5), { gross: 6000, net: 5995, taxable: 500582.5 });
+  assert.deepEqual(lineSteps(3, 0.1, null, 1), { gross: 0.3, net: 0.3, taxable: 0.3 });
+});
+
+test("discount 5 read as 5% is accepted (printed rate)", () => {
+  assert.deepEqual(arith(run(usdPct()).flags), []);
+});
+
+test("discount 5 read as 5% is accepted when the rate must be taken from the other lines", () => {
+  const m = usdPct();
+  delete m.exchange_rate;
+  const r = run(m);
+  assert.deepEqual(r.flags.filter((x) => x.code === "arithmetic_line_mismatch"), []);
+});
+
+test("flat discount above 100 still works, and a flat discount of 100 is not mistaken for 100%", () => {
+  assert.deepEqual(arith(run(usd()).flags), []); // 100 flat -> 5900 USD
+  assert.deepEqual(arith(run(usd({ line_items: [line1({ discount: f(250), taxable_value: f(480125) }), line2()], taxable_value: f(530225), igst: f(95440.5), cess: f(5302.25), grand_total: f(630967.75) })).flags), []);
+});
+
+test("a wrong value is still flagged when discount is a percentage", () => {
+  const fl = run(usdPct({ line_items: [pct1({ taxable_value: f(470000) }), line2()] })).flags.find((x) => x.code === "arithmetic_line_mismatch");
+  assert.ok(fl);
+  assert.equal(fl.itemPosition, 1);
+});
+
+test("INR invoice with a percentage discount: 10 x 1000 less 5% = 9500", () => {
+  const m = model({ line_items: [item({ quantity: f(10), unit_price: f(1000), discount: f(5), taxable_value: f(9500), tax_amount: f(1710), line_total: f(11210) })], taxable_value: f(9500), cgst: f(855), sgst: f(855), grand_total: f(11210) });
+  assert.deepEqual(arith(run(m).flags), []);
+});
+
+test("explicit discount type is trusted over guessing", () => {
+  const mk = (type, taxable) => [{ description: "x", hsn_code: null, quantity: 5, unit: null, unit_price: 1200, discount_amount: 5, discount_type: type, taxable_amount: taxable, gst_rate: 18, gst_amount: null, line_total: null, field_status: {} }];
+  const ctx = { currency: "USD", exchangeRate: 83.5, tolerancePaise: 100 };
+  assert.deepEqual(checkLineItems(mk("PERCENT", 475950), ctx), []);
+  assert.equal(checkLineItems(mk("AMOUNT", 475950), ctx).length, 1); // 5 flat would give 500,582.50
+  assert.deepEqual(checkLineItems(mk("AMOUNT", 500582.5), ctx), []);
 });
