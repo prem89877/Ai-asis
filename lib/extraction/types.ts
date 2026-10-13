@@ -79,6 +79,9 @@ export interface FieldMeta {
   // Where the value was confirmed: "recheck" = two separate AI readings of the document gave the same
   // value; "human" = a reviewer typed or corrected it. Optional, so older records stay valid.
   source?: "recheck" | "human";
+  // Set when the GSTIN check digit was fixed automatically. `from` = the raw extracted GSTIN, `to` = the validated one.
+  // Kept so the review screen can toggle between them and the audit trail never loses the original.
+  autoCorrected?: { from: string; to: string };
 }
 
 export type FlagSeverity = "error" | "warning" | "info";

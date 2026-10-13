@@ -1,7 +1,65 @@
-// GSTIN repair suggestions. Only SUGGESTS: a suggested value is never written into the invoice automatically.
+// GSTIN repair.
+//  - suggestGstinFixes(): only SUGGESTS (check digit or one look-alike character). Never written automatically.
+//  - validateAndRepairGSTIN(): the one automatic repair allowed. It may replace ONLY the 15th character (the
+//    check digit) and only when the first 14 characters already have a valid GSTIN layout. State code, PAN and
+//    entity number are never touched automatically, because a wrong check digit cannot tell us which of the
+//    other characters (if any) was misread.
 // A suggestion is offered only when changing exactly ONE character gives a GSTIN that passes the format and the
 // Modulo-36 check-digit test. The one character is either the check digit itself or a look-alike character.
 import { checkGstin, gstinChecksumChar } from "./normalize.ts";
+
+// Layout of the first 14 characters: state code (2 digits) + PAN (5 letters, 4 digits, 1 letter) + entity number + "Z".
+const GSTIN_PREFIX_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z$/;
+
+export function cleanGstin(raw: string): string {
+  return raw.replace(/\s+/g, "").toUpperCase();
+}
+
+// Modulo-36 check digit for position 15, or null when the first 14 characters are not a valid GSTIN layout.
+export function computeGstinCheckDigit(first14: string): string | null {
+  if (!GSTIN_PREFIX_RE.test(first14)) return null;
+  return gstinChecksumChar(first14);
+}
+
+export type GstinRepairStatus =
+  | "valid" // already passes layout and check digit
+  | "auto_corrected" // only the 15th character was wrong and was replaced
+  | "not_repairable"; // wrong length / layout, or a check digit that cannot be derived
+
+export interface GstinRepairResult {
+  status: GstinRepairStatus;
+  valid: boolean; // the returned `gstin` passes the layout and the Modulo-36 test
+  auto_corrected: boolean;
+  gstin_auto_corrected: boolean; // audit flag, same as auto_corrected
+  gstin: string; // value to save: the corrected GSTIN, or the cleaned input when nothing was changed
+  original_raw_gstin: string; // exactly what was extracted (only upper-cased and stripped of spaces)
+  corrected_char?: { position: 15; from: string; to: string };
+  reason?: "length" | "format";
+}
+
+export interface RepairOptions {
+  // When false the check digit is still computed and reported, but nothing is replaced. Callers pass false for a
+  // reading that is not trusted (low OCR confidence, or not confirmed by a second reading).
+  allowRepair?: boolean;
+}
+
+export function validateAndRepairGSTIN(gstinString: string, opts: RepairOptions = {}): GstinRepairResult {
+  const original = cleanGstin(gstinString ?? "");
+  const base = { original_raw_gstin: original, gstin: original };
+  if (original.length !== 15) return { ...base, status: "not_repairable", valid: false, auto_corrected: false, gstin_auto_corrected: false, reason: "length" };
+  if (checkGstin(original).ok) return { ...base, status: "valid", valid: true, auto_corrected: false, gstin_auto_corrected: false };
+  const digit = computeGstinCheckDigit(original.slice(0, 14));
+  if (digit === null) return { ...base, status: "not_repairable", valid: false, auto_corrected: false, gstin_auto_corrected: false, reason: "format" };
+  if (opts.allowRepair === false) return { ...base, status: "not_repairable", valid: false, auto_corrected: false, gstin_auto_corrected: false };
+  const fixed = original.slice(0, 14) + digit;
+  return {
+    status: "auto_corrected", valid: true, auto_corrected: true, gstin_auto_corrected: true,
+    gstin: fixed, original_raw_gstin: original,
+    corrected_char: { position: 15, from: original[14], to: digit },
+  };
+}
+
+export const GSTIN_AUTO_CORRECTED_LABEL = "GSTIN Auto-Corrected (Checksum Fixed)";
 
 // Pairs that scanners and OCR often confuse. Applied in both directions.
 const LOOKALIKE_PAIRS: readonly [string, string][] = [
