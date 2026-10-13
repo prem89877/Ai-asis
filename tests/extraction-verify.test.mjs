@@ -89,16 +89,20 @@ test("the first reading is kept when only it passes the GSTIN check, with no fla
   assert.equal(relevant(saved(calls)).length, 0);
 });
 
-test("GSTIN that fails the check digit, both readings agree with >95% confidence: info only, no 'misread' text, still completed", async () => {
+test("GSTIN with a wrong check digit, both readings agree with >95% confidence: auto-corrected, raw kept, still completed", async () => {
   const same = model({ supplier_gstin: f("27AAPFU0939F1ZW", 0.97) });
   const { deps, ctx, calls } = setup([ok(same), ok(same)]);
   const r = await runExtraction(deps, ctx);
   assert.equal(r.outcome, "completed");
-  assert.equal(flagOf(saved(calls), "invalid_gstin").length, 0); // no "GSTIN invalid" chip for it
-  const flags = flagOf(saved(calls), "gstin_checksum_note");
+  assert.equal(flagOf(saved(calls), "invalid_gstin").length, 0);
+  assert.equal(saved(calls).vendor_gstin, "27AAPFU0939F1ZV"); // only the 15th character changed
+  const flags = flagOf(saved(calls), "gstin_auto_corrected");
   assert.equal(flags.length, 1);
   assert.equal(flags[0].severity, "info");
-  assert.ok(!/misread/i.test(flags[0].message));
+  assert.equal(flags[0].message, "GSTIN Auto-Corrected (Checksum Fixed)");
+  assert.equal(flags[0].details.gstin_auto_corrected, true);
+  assert.equal(flags[0].details.original_raw_gstin, "27AAPFU0939F1ZW");
+  assert.deepEqual(saved(calls).field_status.supplier_gstin.autoCorrected, { from: "27AAPFU0939F1ZW", to: "27AAPFU0939F1ZV" });
 });
 
 test("single reading with a bad check digit still warns (a misread is possible)", async () => {

@@ -158,18 +158,24 @@ test("GSTIN flag text carries the suggestion; the suggestion is never applied to
   assert.deepEqual(fl.details.suggestions, ["27AAPFU0939F1ZV"]);
 });
 
-test("GSTIN note: label, and it needs two agreeing readings with confidence above 95%", () => {
+test("GSTIN auto-correction needs two agreeing readings with confidence above 95%; otherwise it is only a warning", () => {
   const m = (c) => model({ supplier_gstin: f("27AAPFU0939F1ZW", c) });
   const agreed = new Set(["supplier_gstin"]);
-  const hi = normalizeExtraction(m(0.97), { model: "m", agreed }).extracted.review_flags.find((x) => x.field === "supplier_gstin");
-  assert.equal(hi.code, "gstin_checksum_note");
-  assert.equal(hi.severity, "info");
-  assert.match(hi.message, /GSTIN Checksum Mismatch \(Possible Print Error\)/);
+  const hi = normalizeExtraction(m(0.97), { model: "m", agreed });
+  assert.equal(hi.extracted.vendor_gstin, "27AAPFU0939F1ZV");
+  const note = hi.extracted.review_flags.find((x) => x.field === "supplier_gstin");
+  assert.equal(note.code, "gstin_auto_corrected");
+  assert.equal(note.severity, "info");
+  assert.equal(note.message, "GSTIN Auto-Corrected (Checksum Fixed)");
   for (const [c, ag] of [[0.95, agreed], [0.9, agreed], [0.99, undefined]]) {
-    const fl = normalizeExtraction(m(c), { model: "m", agreed: ag }).extracted.review_flags.find((x) => x.field === "supplier_gstin");
+    const r = normalizeExtraction(m(c), { model: "m", agreed: ag });
+    const fl = r.extracted.review_flags.find((x) => x.field === "supplier_gstin");
     assert.equal(fl.code, "invalid_gstin", `${c} ${ag ? "agreed" : "single"}`);
     assert.equal(fl.severity, "warning");
+    assert.equal(r.extracted.vendor_gstin, "27AAPFU0939F1ZW"); // untouched
   }
+  const off = normalizeExtraction(m(0.97), { model: "m", agreed, gstinAutoCorrect: false });
+  assert.equal(off.extracted.vendor_gstin, "27AAPFU0939F1ZW");
 });
 
 // ---- Review screen with a foreign-currency invoice (no stored exchange rate) --------------------------------------------
