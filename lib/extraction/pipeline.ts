@@ -11,10 +11,13 @@ import { getCheckConfig } from "./config.ts";
 import type { CheckConfig, GeminiConfig } from "./config.ts";
 import { nameKey, normalizeExtraction } from "./normalize.ts";
 import { preflight } from "./preflight.ts";
-import { buildVerifyUserPrompt, VERIFY_SYSTEM_PROMPT } from "./prompt.ts";
-import { validateModelOutput } from "./schema.ts";
-import { reconcile, recheckFlags } from "./verify.ts";
-import type { JobOutcome, ModelOutput, ReviewFlag, StoredExtracted, StoredItem } from "./types.ts";
+import { AUDIT_SYSTEM_PROMPT, AUDIT_USER_PROMPT, buildVerifyUserPrompt, KEYFIGURES_SYSTEM_PROMPT, KEYFIGURES_USER_PROMPT, VERIFY_SYSTEM_PROMPT } from "./prompt.ts";
+import { buildKeyFiguresSchema, validateKeyFigures, validateModelOutput } from "./schema.ts";
+import { resolveGrandTotal } from "./total-check.ts";
+import type { GrandTotalVerdict, ReadingTotal } from "./total-check.ts";
+import { reconcile, reconcileMany, recheckFlags } from "./verify.ts";
+import type { Reconciled } from "./verify.ts";
+import type { JobOutcome, KeyFigures, ModelOutput, ReviewFlag, StoredExtracted, StoredItem } from "./types.ts";
 
 export interface UsageRecordInput {
   firmId: string;
@@ -137,6 +140,22 @@ export function duplicateFlag(e: StoredExtracted, candidates: DuplicateCandidate
   };
 }
 
+// What the grand-total cross-check found, kept with the invoice (validation_summary.total_consensus).
+function totalSummary(v: GrandTotalVerdict | null, layers: number): Record<string, unknown> {
+  if (!v || v.status === "no_value") return {};
+  const final = v.candidates.find((c) => v.field !== null && c.value === v.field.value);
+  return {
+    total_consensus: {
+      status: v.status,
+      witnesses: v.witnessCount,
+      sources: final ? final.witnesses : [],
+      readings: layers,
+      words_value: v.wordsValue,
+      words_match: v.wordsMatch,
+    },
+  };
+}
+
 export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promise<RunResult> {
   const cfg = deps.geminiConfig;
   const checkCfg = deps.checkConfig ?? getCheckConfig({});
@@ -236,48 +255,122 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
     if (!model) return await fail(lastCode);
     if (model.document_type === "not_an_invoice") return await fail("not_an_invoice");
 
-    // ---- Second layer: the model reads the same document again, the two readings are compared in code. ----
-    // If this step fails for any reason the first reading is used as it is and a note is added.
+    // ---- Further layers. Everything below is compared in plain code; the model never decides a final value. ----
+    //   second reading : sees the first reading as data that may be wrong and re-reads the whole document (EXTRACTION_VERIFY)
+    //   audit reading  : blind, row by row, the three full readings are voted field by field (EXTRACTION_AUDIT)
+    //   key figures    : blind, small: totals block, e-invoice identifiers, amount in words (EXTRACTION_TOTAL_CHECK)
+    // They run at the same time, so the run takes about as long as one extra reading. If a layer fails for any reason the
+    // others are still used and a note says which one is missing.
     const recheckNotes: ReviewFlag[] = [];
     let agreed: ReadonlySet<string> | undefined;
-    if (cfg.verify) {
+    let verdict: GrandTotalVerdict | null = null;
+    let layerCount = 1;
+    const firstReading: ModelOutput = model;
+    const wantSecond = cfg.verify;
+    const wantAudit = !!cfg.audit;
+    const wantKey = !!cfg.totalCheck;
+    const extraFull: { name: "second" | "audit"; data: ModelOutput }[] = [];
+    let keyFigures: KeyFigures | null = null;
+
+    if (wantSecond || wantAudit || wantKey) {
       const remaining = cfg.deadlineMs - (now() - started);
       if (remaining < MIN_TIME_FOR_VERIFY_MS) {
         recheckNotes.push({ code: "recheck_unavailable", severity: "info", message: "The second check was skipped because time ran out. Only one reading of the document was used." });
       } else {
-        try {
-          const res = await deps.gemini({
-            apiKey: cfg.apiKey,
-            model: cfg.model,
-            mime: ctx.mime,
-            data: bytes,
-            timeoutMs: Math.max(1_000, Math.min(cfg.timeoutMs, remaining - VERIFY_SAVE_MARGIN_MS)),
-            maxOutputTokens: cfg.maxOutputTokens,
-            fetchImpl: deps.fetchImpl,
-            systemPrompt: VERIFY_SYSTEM_PROMPT,
-            userPrompt: buildVerifyUserPrompt(model),
-          });
+        const timeoutMs = Math.max(1_000, Math.min(cfg.timeoutMs, remaining - VERIFY_SAVE_MARGIN_MS));
+        const call = async (extra: { systemPrompt: string; userPrompt: string; responseSchema?: unknown }): Promise<GeminiCallResult | null> => {
+          try {
+            return await deps.gemini({ apiKey: cfg.apiKey, model: cfg.model, mime: ctx.mime, data: bytes, timeoutMs, maxOutputTokens: cfg.maxOutputTokens, fetchImpl: deps.fetchImpl, ...extra });
+          } catch {
+            return null;
+          }
+        };
+        const [secondRes, auditRes, keyRes] = await Promise.all([
+          wantSecond ? call({ systemPrompt: VERIFY_SYSTEM_PROMPT, userPrompt: buildVerifyUserPrompt(firstReading) }) : Promise.resolve(undefined),
+          wantAudit ? call({ systemPrompt: AUDIT_SYSTEM_PROMPT, userPrompt: AUDIT_USER_PROMPT }) : Promise.resolve(undefined),
+          wantKey ? call({ systemPrompt: KEYFIGURES_SYSTEM_PROMPT, userPrompt: KEYFIGURES_USER_PROMPT, responseSchema: buildKeyFiguresSchema() }) : Promise.resolve(undefined),
+        ]);
+
+        // One full reading (second or audit): parse, record usage, keep it if it is a usable invoice reading.
+        const takeFull = async (name: "second" | "audit", res: GeminiCallResult | null | undefined) => {
+          if (res === undefined) return;
+          const prefix = name === "second" ? "verify" : "audit";
+          const unavailable = () =>
+            recheckNotes.push(
+              name === "second"
+                ? { code: "recheck_unavailable", severity: "info", message: "The second check could not run. Only one reading of the document was used." }
+                : { code: "audit_unavailable", severity: "info", message: "The detailed audit reading could not run, so one reading fewer was used to cross-check this invoice." }
+            );
+          if (res === null) {
+            log(`extraction_${prefix}_error`, { jobId: ctx.jobId });
+            unavailable();
+            return;
+          }
           const parsed = res.ok ? parseModelJson(res.text) : null;
-          const second = parsed && parsed.ok ? validateModelOutput(parsed.value) : null;
-          if (res.ok && second && second.ok) {
-            await recordUsage(res, "verify_ok");
-            if (second.data.document_type === "not_an_invoice") {
-              recheckNotes.push({ code: "recheck_mismatch", severity: "warning", field: "document_type", message: "The second check thought this file is not an invoice. Check the original.", details: { first: model.document_type, second: "not_an_invoice" } });
+          const checked = parsed && parsed.ok ? validateModelOutput(parsed.value) : null;
+          if (res.ok && checked && checked.ok) {
+            await recordUsage(res, `${prefix}_ok`);
+            if (checked.data.document_type === "not_an_invoice") {
+              recheckNotes.push({ code: "recheck_mismatch", severity: "warning", field: "document_type", message: `The ${name === "second" ? "second check" : "audit reading"} thought this file is not an invoice. Check the original.`, details: { first: firstReading.document_type, second: "not_an_invoice" } });
             } else {
-              const rec = reconcile(model, second.data, checkCfg);
-              model = rec.merged;
-              agreed = rec.agreed;
-              recheckNotes.push(...recheckFlags(rec));
+              extraFull.push({ name, data: checked.data });
             }
           } else {
-            await recordUsage(res, res.ok ? "verify_invalid_output" : `verify_${res.code}`);
-            log("extraction_recheck_unavailable", { jobId: ctx.jobId, code: res.ok ? "invalid_model_output" : res.code });
-            recheckNotes.push({ code: "recheck_unavailable", severity: "info", message: "The second check could not run. Only one reading of the document was used." });
+            await recordUsage(res, res.ok ? `${prefix}_invalid_output` : `${prefix}_${res.code}`);
+            log(`extraction_${prefix}_unavailable`, { jobId: ctx.jobId, code: res.ok ? "invalid_model_output" : res.code });
+            unavailable();
           }
-        } catch {
-          log("extraction_recheck_error", { jobId: ctx.jobId });
-          recheckNotes.push({ code: "recheck_unavailable", severity: "info", message: "The second check could not run. Only one reading of the document was used." });
+        };
+        await takeFull("second", secondRes);
+        await takeFull("audit", auditRes);
+
+        if (keyRes !== undefined) {
+          const unavailable = () => recheckNotes.push({ code: "keyfigures_unavailable", severity: "info", message: "The key-figures reading (totals, amount in words, IRN) could not run, so one witness fewer was used for the grand total." });
+          if (keyRes === null) {
+            log("extraction_keyfigures_error", { jobId: ctx.jobId });
+            unavailable();
+          } else {
+            const parsed = keyRes.ok ? parseModelJson(keyRes.text) : null;
+            const checked = parsed && parsed.ok ? validateKeyFigures(parsed.value) : null;
+            if (keyRes.ok && checked && checked.ok) {
+              await recordUsage(keyRes, "keyfigures_ok");
+              keyFigures = checked.data;
+            } else {
+              await recordUsage(keyRes, keyRes.ok ? "keyfigures_invalid_output" : `keyfigures_${keyRes.code}`);
+              log("extraction_keyfigures_unavailable", { jobId: ctx.jobId, code: keyRes.ok ? "invalid_model_output" : keyRes.code });
+              unavailable();
+            }
+          }
         }
+
+        // Vote / compare the readings.
+        const readings: ModelOutput[] = [firstReading, ...extraFull.map((x) => x.data)];
+        layerCount = readings.length + (keyFigures ? 1 : 0);
+        let rec: Reconciled | null = null;
+        if (readings.length >= 3 || keyFigures) rec = reconcileMany(readings, checkCfg, keyFigures);
+        else if (readings.length === 2) rec = reconcile(readings[0], readings[1], checkCfg);
+        if (rec) {
+          model = rec.merged;
+          agreed = rec.agreed;
+          recheckNotes.push(...recheckFlags(rec));
+        }
+      }
+    }
+
+    // ---- Grand total: every reading, the printed amount in words and the invoice arithmetic are witnesses (total-check.ts). ----
+    {
+      const totals: ReadingTotal[] = [{ source: "first", total: firstReading.grand_total, words: firstReading.amount_in_words }];
+      const names = ["second", "audit"] as const;
+      for (const n of names) {
+        const r = extraFull.find((x) => x.name === n);
+        if (r) totals.push({ source: n, total: r.data.grand_total, words: r.data.amount_in_words });
+      }
+      if (keyFigures) totals.push({ source: "keyfigures", total: (keyFigures as KeyFigures).grand_total, words: (keyFigures as KeyFigures).amount_in_words });
+      verdict = resolveGrandTotal(totals, model, checkCfg);
+      recheckNotes.push(...verdict.flags);
+      if (verdict.field && layerCount >= 2) {
+        model = { ...model, grand_total: verdict.field };
+        if (verdict.status === "confirmed" || verdict.status === "corrected") agreed = new Set([...(agreed ?? []), "grand_total"]);
       }
     }
 
@@ -286,10 +379,10 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
 
     // GST validation engine verdict: saved with the invoice. A difference of up to INR 2.00 between the calculated and the
     // printed grand total is recorded as round_off_amount (source "computed"), so the original figures are never changed.
-    const verdict = validateInvoice({ extracted, items }, { tolerancePaise: checkCfg.tolerancePaise });
-    extracted.validation_summary = verdict.summary as unknown as Record<string, unknown>;
-    if (verdict.patch.round_off_amount !== undefined) {
-      extracted.round_off_amount = Math.round(verdict.patch.round_off_amount * 100) / 100;
+    const gstVerdict = validateInvoice({ extracted, items }, { tolerancePaise: checkCfg.tolerancePaise });
+    extracted.validation_summary = { ...(gstVerdict.summary as unknown as Record<string, unknown>), ...(totalSummary(verdict, layerCount)) };
+    if (gstVerdict.patch.round_off_amount !== undefined) {
+      extracted.round_off_amount = Math.round(gstVerdict.patch.round_off_amount * 100) / 100;
       extracted.field_status.round_off_amount = { state: "value", confidence: 1, source: "computed" };
     }
 

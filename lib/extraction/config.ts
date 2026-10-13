@@ -22,6 +22,8 @@ export interface GeminiConfig {
   maxAttempts: number; // provider calls per run
   maxOutputTokens: number;
   verify: boolean; // second AI reading of every invoice, compared with the first (EXTRACTION_VERIFY=off to disable)
+  audit?: boolean; // third, blind row-by-row audit reading; the three readings are voted field by field (EXTRACTION_AUDIT=off to disable)
+  totalCheck?: boolean; // blind key-figures reading (totals block, e-invoice identifiers, amount in words) (EXTRACTION_TOTAL_CHECK=off to disable)
 }
 
 export interface CheckConfig {
@@ -62,6 +64,11 @@ export function getLimits(env: Env = process.env): ExtractionLimits {
   };
 }
 
+// A layer is ON unless its variable is set to off / false / 0 / no.
+function switchedOn(raw: string | undefined): boolean {
+  return !["off", "false", "0", "no"].includes((raw ?? "").trim().toLowerCase());
+}
+
 // Returns null when the API key is missing, so routes can answer 503 before touching any job.
 export function getGeminiConfig(env: Env = process.env): GeminiConfig | null {
   const apiKey = env.GEMINI_API_KEY?.trim();
@@ -75,7 +82,9 @@ export function getGeminiConfig(env: Env = process.env): GeminiConfig | null {
     deadlineMs: int(env, "EXTRACTION_DEADLINE_MS", 52_000, 10_000, 280_000),
     maxAttempts: int(env, "EXTRACTION_MAX_ATTEMPTS", 3, 1, 5),
     maxOutputTokens: int(env, "GEMINI_MAX_OUTPUT_TOKENS", 32_768, 1_024, 65_536),
-    verify: !["off", "false", "0", "no"].includes((env.EXTRACTION_VERIFY ?? "").trim().toLowerCase()),
+    verify: switchedOn(env.EXTRACTION_VERIFY),
+    audit: switchedOn(env.EXTRACTION_AUDIT),
+    totalCheck: switchedOn(env.EXTRACTION_TOTAL_CHECK),
   };
 }
 

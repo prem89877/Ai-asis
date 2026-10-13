@@ -21,6 +21,8 @@ export interface GeminiCallInput {
   // Optional prompt overrides. Used by the second-check pass; the first pass uses the defaults.
   systemPrompt?: string;
   userPrompt?: string;
+  // Optional schema override (the key-figures reading uses a small schema). Default: the full invoice schema.
+  responseSchema?: unknown;
 }
 
 export type GeminiCallResult =
@@ -76,7 +78,7 @@ export const callGemini: GeminiCaller = async (input) => {
     generationConfig: {
       temperature: 0,
       responseMimeType: "application/json",
-      responseSchema: buildResponseSchema(),
+      responseSchema: input.responseSchema ?? buildResponseSchema(),
       maxOutputTokens: input.maxOutputTokens,
     },
   };
