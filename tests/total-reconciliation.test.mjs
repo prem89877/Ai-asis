@@ -227,3 +227,20 @@ test("pipeline: an enterprise invoice with TCS, TDS and net payable is completed
   assert.equal(saved.validation_summary.total_tier, "grand_total");
   assert.ok(!saved.review_flags.some((x) => x.code === "arithmetic_total_mismatch"));
 });
+
+// ---- Interplay with the grand-total witnesses (total-check.ts) ------------------------------------------------------------
+
+test("resolveGrandTotal: the arithmetic witness accepts a grand total before TDS and one after TDS", async () => {
+  const { resolveGrandTotal } = await import("../lib/extraction/total-check.ts");
+  const merged = base({ tcs_amount: f(118), tds_amount: f(100), grand_total: f(118118) });
+  const reading = (source, v) => ({ source, total: f(v), words: undefined });
+  const before = resolveGrandTotal([reading("first", 118118), reading("second", 118118)], merged, OPTS);
+  assert.ok(before.candidates[0].witnesses.includes("arithmetic"));
+  assert.equal(before.field.value, 118118);
+  assert.ok(!before.flags.some((x) => x.severity === "warning"));
+  const after = resolveGrandTotal([reading("first", 118018), reading("second", 118018)], { ...merged, grand_total: f(118018) }, OPTS);
+  assert.ok(after.candidates[0].witnesses.includes("arithmetic"));
+  assert.equal(after.field.value, 118018);
+  const wrong = resolveGrandTotal([reading("first", 118000), reading("second", 118000)], { ...merged, grand_total: f(118000) }, OPTS);
+  assert.ok(!wrong.candidates[0].witnesses.includes("arithmetic"));
+});
