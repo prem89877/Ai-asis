@@ -61,7 +61,7 @@ export interface MsWorksheet { id: string; name: string; tables: { id: string; n
 export async function msSearchWorkbooks(token: string, query: string, opts: ProviderOpts = {}): Promise<MsWorkbook[]> {
   const q = enc(query.trim().slice(0, 100).replace(/'/g, "''"));
   const r = await providerFetch(`${GRAPH}/me/drive/root/search(q='${q}')?$select=id,name,webUrl,file,folder,lastModifiedDateTime&$top=50`, { headers: auth(token) }, { idempotent: true, ...opts });
-  const list: any[] = Array.isArray(r.json?.value) ? r.json.value : []; // eslint-disable-line @typescript-eslint/no-explicit-any
+  const list: any[] = Array.isArray(r.json?.value) ? r.json.value : [];
   return list
     .filter((v) => v && v.file && !v.folder && typeof v.name === "string" && /\.xlsx$/i.test(v.name) && typeof v.id === "string")
     .map((v) => ({ id: v.id as string, name: v.name as string, webUrl: typeof v.webUrl === "string" ? v.webUrl : null, lastModified: typeof v.lastModifiedDateTime === "string" ? v.lastModifiedDateTime : null }));
@@ -70,11 +70,11 @@ export async function msSearchWorkbooks(token: string, query: string, opts: Prov
 export async function msGetWorkbookStructure(token: string, itemId: string, opts: ProviderOpts = {}): Promise<MsWorksheet[]> {
   const ws = await providerFetch(`${item(itemId)}/worksheets?$select=id,name`, { headers: auth(token) }, { idempotent: true, ...opts });
   const sheets: { id: string; name: string }[] = (Array.isArray(ws.json?.value) ? ws.json.value : []).slice(0, 50)
-    .filter((s: any) => typeof s?.id === "string" && typeof s?.name === "string").map((s: any) => ({ id: s.id, name: s.name })); // eslint-disable-line @typescript-eslint/no-explicit-any
+    .filter((s: any) => typeof s?.id === "string" && typeof s?.name === "string").map((s: any) => ({ id: s.id, name: s.name }));
   const out: MsWorksheet[] = [];
   for (const s of sheets) {
     const t = await providerFetch(`${item(itemId)}/worksheets/${enc(s.id)}/tables?$select=id,name`, { headers: auth(token) }, { idempotent: true, ...opts });
-    const tables = (Array.isArray(t.json?.value) ? t.json.value : []).filter((x: any) => typeof x?.id === "string").map((x: any) => ({ id: x.id as string, name: String(x.name ?? "Table") })); // eslint-disable-line @typescript-eslint/no-explicit-any
+    const tables = (Array.isArray(t.json?.value) ? t.json.value : []).filter((x: any) => typeof x?.id === "string").map((x: any) => ({ id: x.id as string, name: String(x.name ?? "Table") }));
     out.push({ ...s, tables });
   }
   return out;

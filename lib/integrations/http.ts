@@ -56,7 +56,7 @@ export interface FetchOptions {
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
 }
 export type ProviderOpts = Partial<Omit<FetchOptions, "idempotent">>;
-export interface ProviderResponse { status: number; json: any; headers: Headers } // eslint-disable-line @typescript-eslint/no-explicit-any
+export interface ProviderResponse { status: number; json: any; headers: Headers }
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const backoff = (attempt: number) => Math.min(4000, 400 * 2 ** (attempt - 1));
@@ -67,7 +67,7 @@ function retryAfterMs(res: Response, attempt: number): number {
   return Number.isFinite(secs) && secs >= 0 ? Math.min(secs, 30) * 1000 : backoff(attempt);
 }
 
-async function readBody(res: Response): Promise<any> { // eslint-disable-line @typescript-eslint/no-explicit-any
+async function readBody(res: Response): Promise<any> {
   try {
     const text = await res.text();
     return text ? JSON.parse(text) : null;
@@ -75,7 +75,7 @@ async function readBody(res: Response): Promise<any> { // eslint-disable-line @t
     return null;
   }
 }
-function providerCode(body: any): string | null { // eslint-disable-line @typescript-eslint/no-explicit-any
+function providerCode(body: any): string | null {
   const e = body?.error;
   const v = typeof e === "string" ? e : typeof e?.status === "string" ? e.status : typeof e?.code === "string" ? e.code : null;
   return v ? v.slice(0, 100) : null;

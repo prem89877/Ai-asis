@@ -63,7 +63,7 @@ const jsonHeaders = (token: string) => ({ ...auth(token), "Content-Type": "appli
 const strings = (row: unknown): string[] => (Array.isArray(row) ? row.map((v) => (v === null || v === undefined ? "" : String(v))) : []);
 
 export interface SpreadsheetInfo { title: string; sheets: { id: number; title: string }[] }
-function parseInfo(j: any): SpreadsheetInfo { // eslint-disable-line @typescript-eslint/no-explicit-any
+function parseInfo(j: any): SpreadsheetInfo {
   const sheets = Array.isArray(j?.sheets) ? j.sheets.map((s: any) => ({ id: Number(s?.properties?.sheetId ?? 0), title: String(s?.properties?.title ?? "") })).filter((s: { title: string }) => s.title) : [];
   return { title: String(j?.properties?.title ?? "Spreadsheet"), sheets };
 }
