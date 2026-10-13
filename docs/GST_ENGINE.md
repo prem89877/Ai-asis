@@ -10,11 +10,13 @@ It only returns flags, a summary and (for round-off) a derived value. It never r
 | `validateTaxAllocation()` | Mixed IGST + CGST/SGST. Lines labelled `applied_tax_type`: sum of line IGST / CGST / SGST must equal the invoice. Lines not labelled: the split that reproduces the totals is searched (up to 16 lines). |
 | `validateInvoiceTotals()` | **Two-tier total check.** Tier 1 Grand Total = Taxable + CGST + SGST + IGST + Cess + TCS. Tier 2 Net Payable = Tier 1 - TDS. The printed `grand_total` passes if it reproduces EITHER tier, within INR 2.00. Pre-tax charges accepted as a line or only in the taxable base. Difference <= INR 2.00 -> `round_off_amount` set, total PASSES. A printed `net_payable_amount` is cross-checked against the total (see below). |
 | `tripleCheckTax()` | Printed invoice tax vs printed line tax vs rate x taxable vs state rule (supplier state / place of supply). "verified" only when every available method agrees. |
-| `validateEInvoiceMetadata()` | IRN (64 hex), ack no (9-15 digits), e-way bill (12 digits): info notes only, never in a calculation. |
+| `validateEInvoiceMetadata()` | IRN (64 hex), ack no (9-15 digits), e-way bill (12 digits): info notes only, never in a calculation. The note says what is wrong (for example "only 63 characters instead of 64"). Cleaning and the reading vote are in `identifiers.ts` / `verify.ts`. |
+| `validateNegativeLines()` | Negative lines (returns, rebates, discounts) are judged ONCE per invoice, not line by line. Signs agree and the items add up to the invoice: silent. Mixed signs on a line, or the invoice adds up only with the line positive: warning `negative_line_suspect`. Cannot be tied to anything: ONE info note `negative_line_items` listing the item numbers. Credit / debit notes: nothing. |
+| `resolveGrandTotal()` (total-check.ts) | Grand total witnesses: every AI reading, the printed amount in words (turned into a number in code) and this engine's arithmetic. See docs/EXTRACTION_LAYERS.md. |
 | `validateAndRepairGSTIN()` (gstin.ts) | Modulo-36 check digit. Only the 15th character is repaired automatically, and only when two readings agree with confidence above 95%. |
 
 ## Bottom-line summary fields and the two-tier total (migration 012)
-The invoice bottom summary is read as four explicit fields (all optional, `missing` when not printed, never turned into 0):
+The invoice bottom summary is read as four explicit fields (all optional, `missing` when not printed, never turned into 0). They are read by every AI reading, including the audit and key-figures readings, and voted like any other field.
 
 | Field | Meaning | In the grand total? |
 |---|---|---|
@@ -31,7 +33,8 @@ How the printed total is judged (`validateInvoiceTotals()` in `gst-engine.ts`):
 5. If `net_payable_amount` is printed, it must equal `printed total - TDS` (Tier 1 match) or the printed total itself (Tier 2 match), within INR 2.00. Otherwise `net_payable_mismatch` (warning). If it is lower than the grand total and no TDS was read, `net_payable_tds_not_found` (info) shows the implied deduction.
 6. Only when neither tier matches: `arithmetic_total_mismatch` (error). Its details carry both expected figures (`expected`, `expectedNetPayable`).
 
-`validation_summary` now also has `total_tier` (`grand_total` or `net_payable`), `expected_grand_total` and `expected_net_payable`.
+`validation_summary` also has `total_tier` (`grand_total` or `net_payable`), `expected_grand_total` and `expected_net_payable`.
+`resolveGrandTotal()` uses this check as its "arithmetic" witness, so a printed total that reproduces either tier gets that witness.
 The old strict `checkTotals()` (Taxable + GST = Total) in `arithmetic.ts` was unused and has been removed.
 
 ## Decisions you may want to change
