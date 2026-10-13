@@ -21,7 +21,7 @@ export type SortColumn = (typeof SORT_COLUMNS)[number];
 export const WARNING_FILTERS = {
   missing_gstin: [
     "missing_field:supplier_gstin", "unreadable_field:supplier_gstin", "missing_field:buyer_gstin", "unreadable_field:buyer_gstin",
-    "invalid_gstin", "tax_without_gstin",
+    "invalid_gstin", "tax_without_gstin", "gstin_unverified", "gstin_conflict", "gstin_roles_swapped",
   ],
   missing_invoice_number: ["missing_required:invoice_number", "unreadable_field:invoice_number"],
   duplicate: ["possible_duplicate"],

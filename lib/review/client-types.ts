@@ -78,6 +78,8 @@ export function warningChips(row: Pick<ReviewRow, "flag_keys" | "flag_codes">): 
   if (has("missing_required:invoice_number", "unreadable_field:invoice_number")) out.push({ key: "invno", label: "Invoice no. missing", tone: "error" });
   if (has("missing_field:supplier_gstin", "unreadable_field:supplier_gstin", "tax_without_gstin")) out.push({ key: "gstin", label: "Supplier GSTIN missing", tone: "warning" });
   if (has("invalid_gstin")) out.push({ key: "badgstin", label: "GSTIN invalid", tone: "warning" });
+  if (has("gstin_unverified", "gstin_conflict", "gstin_roles_swapped")) out.push({ key: "gstinverify", label: "GSTIN not verified", tone: "warning" });
+  if (has("verification_failed")) out.push({ key: "verifyfail", label: "Check failed", tone: "warning" });
   if (has("possible_duplicate")) out.push({ key: "dup", label: "Possible duplicate", tone: "warning" });
   if (has("arithmetic_total_mismatch", "arithmetic_subtotal_mismatch", "arithmetic_line_mismatch", "gst_type_mismatch", "cgst_sgst_unequal", "item_tax_rate_mismatch", "invoice_tax_rate_mismatch", "tax_type_conflict", "tax_on_bill_of_supply")) {
     out.push({ key: "tax", label: "Tax/total mismatch", tone: "error" });
