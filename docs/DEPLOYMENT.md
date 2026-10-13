@@ -37,6 +37,8 @@ Run in this order. Each file once. Use the SQL Editor (paste, Run) or `supabase 
 | 8 | `008_billing.sql` | plans, subscriptions, quota ledger |
 | 9 | `009_billing_fixes.sql` | lock and quota fixes for 008 (formerly `phase5_part2.sql`) |
 | 10 | `010_integrations.sql` | Google/Microsoft connections, sync records, OAuth states |
+| 11 | `011_gst_engine.sql` | GST validation engine: exchange rate, TCS, TDS, pre-tax charges, round-off, e-invoice metadata, line tax labels |
+| 12 | `012_net_payable.sql` | `net_payable_amount` (amount payable after TDS). **Run before deploying the app version that reads it** |
 
 **Renamed files.** The migrations used to have timestamp names (`20261010000001_schema.sql` ... and `phase5_part2.sql`). They now have short numbers. If you already applied the old files, the database is fine and you do not need to run anything again. If you use the Supabase CLI and it complains about history, either keep using the SQL Editor, or align the history table with `supabase migration repair` (mark the old versions reverted and the new ones applied) on a copy first. On a brand-new project nothing special is needed.
 
