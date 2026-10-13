@@ -27,8 +27,8 @@ function same(a: string | number | null, b: string | number | null): boolean {
 // A human-entered value is certain from the model's point of view: confidence 1.
 function humanMeta(value: string | number | null): FieldMeta {
   if (value === null) return { state: "missing", confidence: 1 };
-  if (typeof value === "number" && value === 0) return { state: "zero", confidence: 1 };
-  return { state: "value", confidence: 1 };
+  if (typeof value === "number" && value === 0) return { state: "zero", confidence: 1, source: "human" };
+  return { state: "value", confidence: 1, source: "human" };
 }
 
 export function applyReview(current: CurrentRecord, input: ReviewInput, userId: string, nowIso: string): AppliedReview {

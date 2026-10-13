@@ -2,7 +2,7 @@
 // Extraction-time flags are deliberately not carried over: they described the old values.
 // Flags only point at problems. Values are never changed here.
 import { runChecks } from "../extraction/checks.ts";
-import { checkGstin } from "../extraction/normalize.ts";
+import { checkGstin, gstinChecksumFlagText } from "../extraction/normalize.ts";
 import type { FieldMeta, ModelOutput, ReviewFlag, StoredExtracted, StoredItem } from "../extraction/types.ts";
 import { HEADER_FIELDS } from "./fields.ts";
 import type { HeaderValues } from "./fields.ts";
@@ -57,11 +57,16 @@ export function computeReviewFlags(h: HeaderValues, fieldStatus: Record<string, 
     if (g) {
       const c = checkGstin(g);
       if (!c.ok) {
-        flags.push({
-          code: "invalid_gstin", severity: "warning", field: key,
-          message: c.reason === "format" ? "This is not a valid GSTIN format. Check the original." : "The GSTIN check digit does not match. A character may be wrong.",
-          details: { reason: c.reason },
-        });
+        // A value a reviewer typed/corrected, or one that two AI readings agreed on, is not called "misread".
+        const source = fieldStatus[key]?.source;
+        if (c.reason === "format") {
+          flags.push({ code: "invalid_gstin", severity: "warning", field: key, message: "This is not a valid GSTIN format. Check the original.", details: { reason: c.reason } });
+        } else if (source === "human") {
+          flags.push({ code: "gstin_checksum_note", severity: "info", field: key, message: "This GSTIN does not pass the standard check-digit test. It was entered or corrected by a reviewer, so it is kept as is.", details: { reason: c.reason, confirmedBy: "human" } });
+        } else {
+          const t = gstinChecksumFlagText(source === "recheck");
+          flags.push({ code: t.severity === "info" ? "gstin_checksum_note" : "invalid_gstin", severity: t.severity, field: key, message: t.message, details: { reason: c.reason, ...(source === "recheck" ? { confirmedByRecheck: true } : {}) } });
+        }
       }
     }
   }
