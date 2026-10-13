@@ -218,8 +218,12 @@ test("returns and trade-volume rebates as negative lines on a normal tax invoice
   const rebate = item({ description: f("Volume rebate"), quantity: f(1), unit_price: f(500), taxable_value: f(-500), tax_amount: f(-90), line_total: f(-590) });
   const n = norm(model({ taxable_value: f(1500), cgst: f(135), sgst: f(135), grand_total: f(1770), line_items: [sale, rebate] }));
   assert.ok(!n.extracted.review_flags.some((x) => x.code === "negative_amount"));
-  assert.ok(n.extracted.review_flags.some((x) => x.code === "negative_line_item" && x.severity === "info"));
-  assert.deepEqual(problems(validateInvoice(n, OPTS)), []);
+  // A believable negative line (signs agree, items still add up to the invoice) raises NO per-line flag at all.
+  assert.ok(!n.extracted.review_flags.some((x) => x.code === "negative_line_item"));
+  const v = validateInvoice(n, OPTS);
+  assert.deepEqual(v.flags, []);
+  assert.deepEqual(v.summary.negative_lines, { positions: [2], status: "confirmed" });
+  assert.deepEqual(problems(v), []);
   assert.deepEqual(slabSummary(n.items).map((s) => [s.rate, s.taxable]), [[18, 1500]]);
 });
 

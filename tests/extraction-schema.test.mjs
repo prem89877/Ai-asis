@@ -62,7 +62,8 @@ test("response schema lists every field as required", () => {
   const s = buildResponseSchema();
   assert.ok(s.required.includes("grand_total") && s.required.includes("line_items"));
   // Optional extras: only some invoices print them (exchange rate, TCS, TDS, pre-tax charges, round-off, IRN, ack no, e-way bill no)
-  const optional = ["exchange_rate", "tcs_amount", "tds_amount", "pre_tax_charges", "round_off_amount", "irn", "ack_no", "eway_bill_no"];
+  // amount_in_words = the grand total printed in words, used by the grand-total cross-check
+  const optional = ["exchange_rate", "tcs_amount", "tds_amount", "pre_tax_charges", "round_off_amount", "irn", "ack_no", "eway_bill_no", "amount_in_words"];
   assert.deepEqual(Object.keys(s.properties).filter((k) => !s.required.includes(k)), optional);
   assert.equal(Object.keys(s.properties).length, s.required.length + optional.length);
   // per-item optional hints are described to the model but never required
