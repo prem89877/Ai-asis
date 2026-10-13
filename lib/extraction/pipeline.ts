@@ -3,6 +3,7 @@
 // Everything outside this file (database, storage, provider) is injected, so it can be tested without network.
 import { createHash } from "node:crypto";
 import { runChecks, outcomeFor } from "./checks.ts";
+import { validateInvoice } from "./gst-engine.ts";
 import type { ExtractionErrorCode } from "./errors.ts";
 import { estimateCostUsd } from "./gemini.ts";
 import type { GeminiCaller, GeminiCallResult } from "./gemini.ts";
@@ -282,6 +283,15 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
 
     const { extracted, items } = normalizeExtraction(model, { model: cfg.model, now: new Date(now()), agreed });
     const flags: ReviewFlag[] = [...extracted.review_flags, ...runChecks(extracted, items, checkCfg), ...recheckNotes];
+
+    // GST validation engine verdict: saved with the invoice. A difference of up to INR 2.00 between the calculated and the
+    // printed grand total is recorded as round_off_amount (source "computed"), so the original figures are never changed.
+    const verdict = validateInvoice({ extracted, items }, { tolerancePaise: checkCfg.tolerancePaise });
+    extracted.validation_summary = verdict.summary as unknown as Record<string, unknown>;
+    if (verdict.patch.round_off_amount !== undefined) {
+      extracted.round_off_amount = Math.round(verdict.patch.round_off_amount * 100) / 100;
+      extracted.field_status.round_off_amount = { state: "value", confidence: 1, source: "computed" };
+    }
 
     try {
       const candidates = await deps.store.findDuplicateCandidates({

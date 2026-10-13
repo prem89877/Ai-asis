@@ -50,6 +50,19 @@ export const ITEM_NUMBER_FIELDS = [
   "line_total",
 ] as const;
 
+// Optional extras (older readings and plain invoices do not have them, so they are never required).
+//  - amounts are positive numbers as printed; tcs_amount = Tax Collected at Source (Sec 206C), tds_amount = tax deducted,
+//    pre_tax_charges = freight / handling / transit insurance / packaging charged before tax,
+//    round_off_amount = printed round-off (may be negative), exchange_rate = INR per 1 unit of the invoice currency.
+//  - text fields are e-invoice / e-way bill metadata. They are stored as text only and never enter any calculation.
+export const OPTIONAL_AMOUNT_FIELDS = ["exchange_rate", "tcs_amount", "tds_amount", "pre_tax_charges", "round_off_amount"] as const;
+export const OPTIONAL_TEXT_FIELDS = ["irn", "ack_no", "eway_bill_no"] as const;
+// Optional per-item text fields: discount_type is PERCENT or FLAT, applied_tax_type is IGST or CGST_SGST.
+export const ITEM_OPTIONAL_TEXT_FIELDS = ["discount_type", "applied_tax_type"] as const;
+export type OptionalAmountField = (typeof OPTIONAL_AMOUNT_FIELDS)[number];
+export type OptionalTextField = (typeof OPTIONAL_TEXT_FIELDS)[number];
+export type ItemOptionalTextField = (typeof ITEM_OPTIONAL_TEXT_FIELDS)[number];
+
 export type HeaderTextField = (typeof HEADER_TEXT_FIELDS)[number];
 export type HeaderAmountField = (typeof HEADER_AMOUNT_FIELDS)[number];
 export type ItemTextField = (typeof ITEM_TEXT_FIELDS)[number];
@@ -57,16 +70,14 @@ export type ItemNumberField = (typeof ITEM_NUMBER_FIELDS)[number];
 
 export type ModelItem = { [K in ItemTextField]: ModelField<string> } & {
   [K in ItemNumberField]: ModelField<number>;
-};
+} & { [K in ItemOptionalTextField]?: ModelField<string> };
 
 export type ModelOutput = {
   document_type: DocumentType;
   line_items: ModelItem[];
-  // Optional: INR per 1 unit of the invoice currency, only when the document prints an exchange rate.
-  exchange_rate?: ModelField<number>;
 } & { [K in HeaderTextField]: ModelField<string> } & {
   [K in HeaderAmountField]: ModelField<number>;
-};
+} & { [K in OptionalAmountField]?: ModelField<number> } & { [K in OptionalTextField]?: ModelField<string> };
 
 // ---- Stored (normalized) shapes -------------------------------------------------------------
 
@@ -78,7 +89,8 @@ export interface FieldMeta {
   confidence: number;
   // Where the value was confirmed: "recheck" = two separate AI readings of the document gave the same
   // value; "human" = a reviewer typed or corrected it. Optional, so older records stay valid.
-  source?: "recheck" | "human";
+  // "computed" = derived by the validation engine (for example a round-off that absorbs a rounding difference).
+  source?: "recheck" | "human" | "computed";
   // Set when the GSTIN check digit was fixed automatically. `from` = the raw extracted GSTIN, `to` = the validated one.
   // Kept so the review screen can toggle between them and the audit trail never loses the original.
   autoCorrected?: { from: string; to: string };
@@ -104,7 +116,16 @@ export interface StoredExtracted {
   invoice_date: string | null;
   place_of_supply: string | null;
   currency: string | null;
-  exchange_rate?: number | null; // not stored in its own column; used by the arithmetic checks
+  exchange_rate?: number | null; // INR per 1 unit of the invoice currency; missing is treated as 1.0 for INR invoices
+  tcs_amount?: number | null; // Tax Collected at Source, Sec 206C
+  tds_amount?: number | null;
+  pre_tax_charges?: number | null; // freight, handling, transit insurance, packaging
+  round_off_amount?: number | null; // positive or negative
+  irn?: string | null; // e-invoice metadata: text only, never used in a calculation
+  ack_no?: string | null;
+  eway_bill_no?: string | null;
+  gstin_auto_corrected?: boolean;
+  validation_summary?: Record<string, unknown> | null; // result of the validation engine (see gst-engine.ts)
   taxable_amount: number | null;
   discount_amount: number | null;
   cgst_amount: number | null;
@@ -127,7 +148,8 @@ export interface StoredItem {
   unit: string | null;
   unit_price: number | null;
   discount_amount: number | null;
-  discount_type?: "PERCENT" | "AMOUNT" | null; // optional hint; when absent both readings are tried
+  discount_type?: "PERCENT" | "FLAT" | "AMOUNT" | null; // optional hint (FLAT = AMOUNT); when absent both readings are tried
+  applied_tax_type?: "IGST" | "CGST_SGST" | "NONE" | null; // which tax this line carries; lets mixed-tax invoices be checked line by line
   taxable_amount: number | null;
   gst_rate: number | null;
   gst_amount: number | null;

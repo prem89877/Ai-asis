@@ -5,7 +5,10 @@ import {
   HEADER_AMOUNT_FIELDS,
   HEADER_TEXT_FIELDS,
   ITEM_NUMBER_FIELDS,
+  ITEM_OPTIONAL_TEXT_FIELDS,
   ITEM_TEXT_FIELDS,
+  OPTIONAL_AMOUNT_FIELDS,
+  OPTIONAL_TEXT_FIELDS,
 } from "./types.ts";
 import type { FieldStatus, ModelOutput } from "./types.ts";
 
@@ -23,11 +26,12 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function checkKeys(obj: Record<string, unknown>, allowed: readonly string[], path: string, errors: string[]) {
+// `required` keys must exist; `optional` keys may exist. Any other key is rejected.
+function checkKeys(obj: Record<string, unknown>, required: readonly string[], path: string, errors: string[], optional: readonly string[] = []) {
   for (const key of Object.keys(obj)) {
-    if (!allowed.includes(key)) errors.push(`${path}.${key}: unexpected key`);
+    if (!required.includes(key) && !optional.includes(key)) errors.push(`${path}.${key}: unexpected key`);
   }
-  for (const key of allowed) {
+  for (const key of required) {
     if (!(key in obj)) errors.push(`${path}.${key}: required`);
   }
 }
@@ -70,10 +74,11 @@ export function validateModelOutput(input: unknown): ValidationResult {
   const errors: string[] = [];
   if (!isRecord(input)) return { ok: false, errors: ["root: must be an object"] };
 
-  // exchange_rate is optional: older readings and plain INR invoices do not have it.
-  const hasRate = "exchange_rate" in input;
-  checkKeys(input, ["document_type", "line_items", ...HEADER_TEXT_FIELDS, ...HEADER_AMOUNT_FIELDS, ...(hasRate ? ["exchange_rate"] : [])], "root", errors);
-  if (hasRate) checkField(input.exchange_rate, "number", "exchange_rate", errors);
+  // Optional extras (exchange rate, TCS, TDS, pre-tax charges, round-off, IRN, ack no, e-way bill no): older readings
+  // and plain INR invoices do not have them. When present they are checked exactly like every other field.
+  checkKeys(input, ["document_type", "line_items", ...HEADER_TEXT_FIELDS, ...HEADER_AMOUNT_FIELDS], "root", errors, [...OPTIONAL_AMOUNT_FIELDS, ...OPTIONAL_TEXT_FIELDS]);
+  for (const key of OPTIONAL_AMOUNT_FIELDS) if (key in input) checkField(input[key], "number", key, errors);
+  for (const key of OPTIONAL_TEXT_FIELDS) if (key in input) checkField(input[key], "string", key, errors);
 
   if (typeof input.document_type !== "string" || !(DOCUMENT_TYPES as readonly string[]).includes(input.document_type)) {
     errors.push("root.document_type: not an allowed value");
@@ -97,8 +102,9 @@ export function validateModelOutput(input: unknown): ValidationResult {
         errors.push(`${path}: must be an object`);
         return;
       }
-      checkKeys(item, [...ITEM_TEXT_FIELDS, ...ITEM_NUMBER_FIELDS], path, errors);
+      checkKeys(item, [...ITEM_TEXT_FIELDS, ...ITEM_NUMBER_FIELDS], path, errors, ITEM_OPTIONAL_TEXT_FIELDS);
       for (const key of ITEM_TEXT_FIELDS) if (key in item) checkField(item[key], "string", `${path}.${key}`, errors);
+      for (const key of ITEM_OPTIONAL_TEXT_FIELDS) if (key in item) checkField(item[key], "string", `${path}.${key}`, errors);
       for (const key of ITEM_NUMBER_FIELDS) if (key in item) checkField(item[key], "number", `${path}.${key}`, errors);
     });
   }
@@ -126,7 +132,9 @@ export function buildResponseSchema() {
   const itemProps: Record<string, unknown> = {};
   for (const k of ITEM_TEXT_FIELDS) itemProps[k] = fieldSchema("STRING");
   for (const k of ITEM_NUMBER_FIELDS) itemProps[k] = fieldSchema("NUMBER");
-  const itemKeys = [...ITEM_TEXT_FIELDS, ...ITEM_NUMBER_FIELDS];
+  for (const k of ITEM_OPTIONAL_TEXT_FIELDS) itemProps[k] = fieldSchema("STRING");
+  const itemKeys = [...ITEM_TEXT_FIELDS, ...ITEM_NUMBER_FIELDS]; // required
+  const itemOrder = [...itemKeys, ...ITEM_OPTIONAL_TEXT_FIELDS];
 
   const props: Record<string, unknown> = {
     document_type: { type: "STRING", enum: [...DOCUMENT_TYPES] },
@@ -135,10 +143,12 @@ export function buildResponseSchema() {
   for (const k of HEADER_AMOUNT_FIELDS) props[k] = fieldSchema("NUMBER");
   props.line_items = {
     type: "ARRAY",
-    items: { type: "OBJECT", properties: itemProps, required: itemKeys, propertyOrdering: itemKeys },
+    items: { type: "OBJECT", properties: itemProps, required: itemKeys, propertyOrdering: itemOrder },
   };
 
-  props.exchange_rate = fieldSchema("NUMBER");
+  // Optional extras are described to the model but not required, so a plain invoice does not have to carry them.
+  for (const k of OPTIONAL_AMOUNT_FIELDS) props[k] = fieldSchema("NUMBER");
+  for (const k of OPTIONAL_TEXT_FIELDS) props[k] = fieldSchema("STRING");
   const keys = ["document_type", ...HEADER_TEXT_FIELDS, ...HEADER_AMOUNT_FIELDS, "line_items"];
-  return { type: "OBJECT", properties: props, required: keys, propertyOrdering: [...keys, "exchange_rate"] };
+  return { type: "OBJECT", properties: props, required: keys, propertyOrdering: [...keys, ...OPTIONAL_AMOUNT_FIELDS, ...OPTIONAL_TEXT_FIELDS] };
 }

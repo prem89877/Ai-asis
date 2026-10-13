@@ -3,6 +3,7 @@
 // Anything that cannot be stored safely becomes null with state "invalid" and a review flag.
 import { GSTIN_AUTO_CORRECTED_LABEL, suggestGstinFixes, suggestionText, validateAndRepairGSTIN } from "./gstin.ts";
 import { HEADER_AMOUNT_FIELDS, HEADER_TEXT_FIELDS } from "./types.ts";
+import type { StoredItem as StoredItemType } from "./types.ts";
 import type {
   FieldMeta,
   FieldState,
@@ -110,7 +111,7 @@ function readAmount(
   c: Collector,
   key: string,
   f: ModelField<number>,
-  opts: { dp: number; max: number; itemPosition?: number }
+  opts: { dp: number; max: number; itemPosition?: number; allowNegative?: boolean }
 ): number | null {
   const base = opts.itemPosition ? { itemPosition: opts.itemPosition } : {};
   if (f.status !== "present") {
@@ -124,7 +125,7 @@ function readAmount(
     return null;
   }
   c.status[key] = meta(f, v === 0 ? "zero" : "value");
-  if (v < 0) {
+  if (v < 0 && !opts.allowNegative) {
     c.flags.push({ code: "negative_amount", severity: "warning", field: key, ...base, message: "A negative number was extracted. Check the original." });
   }
   if (decimalsExceed(v, opts.dp)) {
@@ -166,6 +167,29 @@ export interface NormalizeResult {
   items: StoredItem[];
 }
 
+function currencyEarly(raw: string | null): string | null {
+  return raw !== null && /^[A-Za-z]{3}$/.test(raw) ? raw.toUpperCase() : null;
+}
+
+// "PERCENT" / "%" -> PERCENT; "FLAT" / "AMOUNT" / "VALUE" -> FLAT. Anything else is dropped (the arithmetic then tries both readings).
+export function normalizeDiscountType(raw: string | null): "PERCENT" | "FLAT" | null {
+  if (raw === null) return null;
+  const t = raw.trim().toUpperCase();
+  if (/^(PERCENT|PERCENTAGE|PCT|%)$/.test(t)) return "PERCENT";
+  if (/^(FLAT|AMOUNT|VALUE|FIXED|ABSOLUTE)$/.test(t)) return "FLAT";
+  return null;
+}
+
+// "IGST" -> IGST; "CGST_SGST", "CGST+SGST", "CGST/SGST", "CGST & SGST", "SGST/UTGST" -> CGST_SGST; "NONE", "NIL", "EXEMPT" -> NONE.
+export function normalizeAppliedTaxType(raw: string | null): StoredItemType["applied_tax_type"] {
+  if (raw === null) return null;
+  const t = raw.trim().toUpperCase().replace(/[^A-Z]/g, "");
+  if (t === "IGST") return "IGST";
+  if (/^(CGSTSGST|SGSTCGST|CGSTUTGST|UTGSTCGST|CGSTANDSGST|CGSTANDUTGST)$/.test(t)) return "CGST_SGST";
+  if (/^(NONE|NIL|EXEMPT|NILRATED|ZERO)$/.test(t)) return "NONE";
+  return null;
+}
+
 export function normalizeExtraction(model: ModelOutput, opts: NormalizeOptions): NormalizeResult {
   const c: Collector = { flags: [], status: {} };
   const now = opts.now ?? new Date();
@@ -173,7 +197,9 @@ export function normalizeExtraction(model: ModelOutput, opts: NormalizeOptions):
   const text: Record<string, string | null> = {};
   for (const key of HEADER_TEXT_FIELDS) text[key] = readText(c, key, model[key]);
   const amt: Record<string, number | null> = {};
-  for (const key of HEADER_AMOUNT_FIELDS) amt[key] = readAmount(c, key, model[key], { dp: 2, max: MAX_ABS_AMOUNT });
+  // Credit / debit notes (and returns, rebates) may legitimately print negative amounts: no negative-value warning there.
+  const memo = model.document_type === "credit_note" || model.document_type === "debit_note";
+  for (const key of HEADER_AMOUNT_FIELDS) amt[key] = readAmount(c, key, model[key], { dp: 2, max: MAX_ABS_AMOUNT, allowNegative: memo });
 
   // Values that two separate readings agreed on are remembered, so later edits do not re-raise doubts about them.
   if (opts.agreed) {
@@ -193,6 +219,23 @@ export function normalizeExtraction(model: ModelOutput, opts: NormalizeOptions):
       exchangeRate = null;
     }
   }
+
+  // Optional extras: TCS (Sec 206C), TDS, pre-tax charges (freight, handling, transit insurance, packaging), round-off.
+  // Round-off may be negative; the others are normally positive. Absent stays null, it is never turned into 0.
+  const extras: Record<string, number | null> = {};
+  for (const key of ["tcs_amount", "tds_amount", "pre_tax_charges", "round_off_amount"] as const) {
+    const f = model[key];
+    extras[key] = f ? readAmount(c, key, f, { dp: 2, max: MAX_ABS_AMOUNT, allowNegative: memo || key === "round_off_amount" }) : null;
+  }
+  // e-invoice / e-way bill metadata: text only, stripped of spaces and dashes, and never used in any calculation.
+  const meta2: Record<string, string | null> = {};
+  for (const key of ["irn", "ack_no", "eway_bill_no"] as const) {
+    const f = model[key];
+    const v = f ? readText(c, key, f) : null;
+    meta2[key] = v === null ? null : v.replace(/[\s-]+/g, "");
+  }
+  // INR invoices carry exchange rate 1.0 by default. A foreign currency without a printed rate stays null: never guessed.
+  if (exchangeRate === null && (currencyEarly(text.currency) === "INR")) exchangeRate = 1;
 
   // GSTINs: keep what was read (upper-case, no spaces); flag anything that is not a valid GSTIN.
   for (const key of ["supplier_gstin", "buyer_gstin"] as const) {
@@ -273,12 +316,19 @@ export function normalizeExtraction(model: ModelOutput, opts: NormalizeOptions):
         c.flags.push({ code: "invalid_hsn", severity: "info", field: "hsn_sac", itemPosition: position, message: "The HSN/SAC is not 4 to 8 digits, so it was not saved." });
       }
     }
-    const quantity = readAmount(ic, "quantity", mi.quantity, { dp: 3, max: MAX_ABS_QUANTITY, itemPosition: position });
-    const unitPrice = readAmount(ic, "unit_price", mi.unit_price, { dp: 4, max: MAX_ABS_AMOUNT, itemPosition: position });
-    const discount = readAmount(ic, "discount", mi.discount, { dp: 2, max: MAX_ABS_AMOUNT, itemPosition: position });
-    const taxable = readAmount(ic, "taxable_value", mi.taxable_value, { dp: 2, max: MAX_ABS_AMOUNT, itemPosition: position });
-    const taxAmount = readAmount(ic, "tax_amount", mi.tax_amount, { dp: 2, max: MAX_ABS_AMOUNT, itemPosition: position });
-    const lineTotal = readAmount(ic, "line_total", mi.line_total, { dp: 2, max: MAX_ABS_AMOUNT, itemPosition: position });
+    // Returns, rebates and trade-volume discounts print negative lines: allowed, noted once as information.
+    const neg = { allowNegative: true };
+    const quantity = readAmount(ic, "quantity", mi.quantity, { dp: 3, max: MAX_ABS_QUANTITY, itemPosition: position, ...neg });
+    const unitPrice = readAmount(ic, "unit_price", mi.unit_price, { dp: 4, max: MAX_ABS_AMOUNT, itemPosition: position, ...neg });
+    const discount = readAmount(ic, "discount", mi.discount, { dp: 2, max: MAX_ABS_AMOUNT, itemPosition: position, ...neg });
+    const taxable = readAmount(ic, "taxable_value", mi.taxable_value, { dp: 2, max: MAX_ABS_AMOUNT, itemPosition: position, ...neg });
+    const taxAmount = readAmount(ic, "tax_amount", mi.tax_amount, { dp: 2, max: MAX_ABS_AMOUNT, itemPosition: position, ...neg });
+    const lineTotal = readAmount(ic, "line_total", mi.line_total, { dp: 2, max: MAX_ABS_AMOUNT, itemPosition: position, ...neg });
+    if ((taxable !== null && taxable < 0) || (quantity !== null && quantity < 0) || (lineTotal !== null && lineTotal < 0)) {
+      c.flags.push({ code: "negative_line_item", severity: "info", itemPosition: position, message: "This line is negative (return, rebate or discount line)." });
+    }
+    const discountType = mi.discount_type ? normalizeDiscountType(readText(ic, "discount_type", mi.discount_type)) : null;
+    const appliedTax = mi.applied_tax_type ? normalizeAppliedTaxType(readText(ic, "applied_tax_type", mi.applied_tax_type)) : null;
 
     let rate = readAmount(ic, "gst_rate", mi.gst_rate, { dp: 2, max: 1e6, itemPosition: position });
     if (rate !== null && (rate < 0 || rate > 100)) {
@@ -293,6 +343,8 @@ export function normalizeExtraction(model: ModelOutput, opts: NormalizeOptions):
       unit,
       unit_price: unitPrice,
       discount_amount: discount,
+      discount_type: discountType,
+      applied_tax_type: appliedTax,
       taxable_amount: taxable,
       gst_rate: rate,
       gst_amount: taxAmount,
@@ -319,6 +371,14 @@ export function normalizeExtraction(model: ModelOutput, opts: NormalizeOptions):
     place_of_supply: text.place_of_supply,
     currency,
     exchange_rate: exchangeRate,
+    tcs_amount: extras.tcs_amount,
+    tds_amount: extras.tds_amount,
+    pre_tax_charges: extras.pre_tax_charges,
+    round_off_amount: extras.round_off_amount,
+    irn: meta2.irn,
+    ack_no: meta2.ack_no,
+    eway_bill_no: meta2.eway_bill_no,
+    gstin_auto_corrected: ["supplier_gstin", "buyer_gstin"].some((k) => c.status[k]?.autoCorrected !== undefined),
     taxable_amount: amt.taxable_value,
     discount_amount: amt.discount_total,
     cgst_amount: amt.cgst,

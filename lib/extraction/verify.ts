@@ -8,7 +8,7 @@
 import { checkGstin, cleanText, normalizeHsn, normalizeIsoDate, normalizeExtraction } from "./normalize.ts";
 import { runChecks } from "./checks.ts";
 import type { CheckOptions } from "./checks.ts";
-import { HEADER_AMOUNT_FIELDS, HEADER_TEXT_FIELDS, ITEM_NUMBER_FIELDS, ITEM_TEXT_FIELDS } from "./types.ts";
+import { HEADER_AMOUNT_FIELDS, HEADER_TEXT_FIELDS, ITEM_NUMBER_FIELDS, ITEM_OPTIONAL_TEXT_FIELDS, ITEM_TEXT_FIELDS, OPTIONAL_AMOUNT_FIELDS, OPTIONAL_TEXT_FIELDS } from "./types.ts";
 import type { ModelField, ModelItem, ModelOutput, ReviewFlag } from "./types.ts";
 
 export type Scalar = string | number | null;
@@ -36,7 +36,8 @@ const CONFIRM_ONLY_CONFIDENCE = 0.6; // value seen in one reading only
 
 const GSTIN_KEYS = new Set(["supplier_gstin", "buyer_gstin"]);
 // Free-text item fields: wording differences between two readings are normal and not worth a review flag.
-const SOFT_ITEM_FIELDS = new Set(["description", "unit"]);
+// discount_type / applied_tax_type are labels the model adds, not printed values: a difference is settled quietly too.
+const SOFT_ITEM_FIELDS = new Set(["description", "unit", "discount_type", "applied_tax_type"]);
 
 type AnyField = ModelField<string> | ModelField<number>;
 
@@ -191,10 +192,18 @@ export function reconcile(first: ModelOutput, second: ModelOutput, opts: CheckOp
     settle(key, "number", first[key], second[key], merged as unknown as Record<string, AnyField>, headerScore(key));
   }
 
-  // Optional exchange rate: compared like an amount when either reading has it.
-  if (first.exchange_rate || second.exchange_rate) {
-    const none: ModelField<number> = { status: "missing", value: null, confidence: 1 };
-    settle("exchange_rate", "number", first.exchange_rate ?? none, second.exchange_rate ?? none, merged as unknown as Record<string, AnyField>, null);
+  // Optional extras (exchange rate, TCS, TDS, pre-tax charges, round-off; IRN, ack no, e-way bill no): compared like the
+  // other fields when either reading has them. A reading without the field counts as "missing".
+  const none: ModelField<number> = { status: "missing", value: null, confidence: 1 };
+  const noneText: ModelField<string> = { status: "missing", value: null, confidence: 1 };
+  const mergedAny = merged as unknown as Record<string, AnyField>;
+  for (const key of OPTIONAL_AMOUNT_FIELDS) {
+    if (!first[key] && !second[key]) continue;
+    settle(key, "number", first[key] ?? none, second[key] ?? none, mergedAny, key === "exchange_rate" ? null : headerScore(key));
+  }
+  for (const key of OPTIONAL_TEXT_FIELDS) {
+    if (!first[key] && !second[key]) continue;
+    settle(key, "text", first[key] ?? noneText, second[key] ?? noneText, mergedAny, null);
   }
 
   // Line items are only compared when both readings found the same number of rows. Rows are never matched by guesswork.
@@ -212,6 +221,9 @@ export function reconcile(first: ModelOutput, second: ModelOutput, opts: CheckOp
       };
       for (const key of ITEM_TEXT_FIELDS) settle(key, "text", fi[key], si[key], row, null, idx + 1);
       for (const key of ITEM_NUMBER_FIELDS) settle(key, "number", fi[key], si[key], row, itemScore(key), idx + 1);
+      for (const key of ITEM_OPTIONAL_TEXT_FIELDS) {
+        if (fi[key] || si[key]) settle(key, "text", fi[key] ?? noneText, si[key] ?? noneText, row, null, idx + 1);
+      }
     });
   }
 

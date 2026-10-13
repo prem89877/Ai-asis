@@ -1,5 +1,5 @@
 // Review checks. They only ADD flags. They never change an extracted value.
-import { checkLineItems, checkTotals } from "./arithmetic.ts";
+import { validateInvoice } from "./gst-engine.ts";
 import type { FieldMeta, ReviewFlag, StoredExtracted, StoredItem } from "./types.ts";
 
 export interface CheckOptions {
@@ -25,10 +25,6 @@ const OPTIONAL_NOTE: Record<string, string> = {
   buyer_gstin: "buyer GSTIN",
   place_of_supply: "place of supply",
 };
-
-function nz(v: number | null): number {
-  return v ?? 0;
-}
 
 export function runChecks(extracted: StoredExtracted, items: StoredItem[], opts: CheckOptions): ReviewFlag[] {
   const flags: ReviewFlag[] = [];
@@ -86,14 +82,9 @@ export function runChecks(extracted: StoredExtracted, items: StoredItem[], opts:
     flags.push({ code: "low_confidence_item", severity: "warning", message: `${lowConf.length} item value(s) were read with low confidence.`, details: { fields: lowConf.slice(0, 50) } });
   }
 
-  // 4. Tax type consistency: IGST and CGST/SGST do not normally appear together.
-  if (nz(extracted.igst_amount) !== 0 && (nz(extracted.cgst_amount) !== 0 || nz(extracted.sgst_amount) !== 0)) {
-    flags.push({ code: "tax_type_conflict", severity: "warning", message: "IGST and CGST/SGST are both present. Check which applies." });
-  }
-
-  // 5. Arithmetic: line items (INR or foreign currency) and invoice totals. See arithmetic.ts.
-  const ctx = { currency: extracted.currency, exchangeRate: extracted.exchange_rate, tolerancePaise: tol };
-  flags.push(...checkLineItems(items, ctx), ...checkTotals(extracted, items, ctx));
+  // 4. + 5. Line arithmetic (INR and foreign currency), tax allocation (mixed IGST + CGST/SGST is allowed when the lines
+  // add up), grand total with TCS / TDS / pre-tax charges / round-off, and the GST cross check. See gst-engine.ts.
+  flags.push(...validateInvoice({ extracted, items }, { tolerancePaise: tol }).flags);
 
   return flags;
 }

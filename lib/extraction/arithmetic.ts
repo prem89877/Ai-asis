@@ -49,7 +49,7 @@ function median(values: number[]): number {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
-export type DiscountType = "PERCENT" | "AMOUNT";
+export type DiscountType = "PERCENT" | "AMOUNT" | "FLAT"; // FLAT and AMOUNT mean the same: a flat money amount
 
 // Money maths is done on numbers rounded to 1e-6, so binary float noise (0.1 + 0.2) never decides a result.
 function clean(x: number): number {
@@ -114,60 +114,86 @@ function impliedRate(items: StoredItem[]): number | null {
   return median(plain);
 }
 
+export interface LineRateContext {
+  tolerancePaise: number;
+  foreign: boolean;
+  explicitRate: number | null; // exchange rate printed on the invoice
+  impliedRate: number | null; // rate found from the other lines
+}
+
+export type LineVerdict =
+  | { status: "pass"; expectedPaise: number }
+  | { status: "unverified" } // foreign currency but nothing to convert with
+  | { status: "skipped" } // quantity, unit price or taxable value is missing
+  | { status: "fail"; expectedPaise: number; flag: ReviewFlag };
+
+// ONE line item: net = gross - discount (flat or %), taxable (INR) = net x exchange rate, compared with the printed
+// taxable value (soft tolerance, default INR 1.00). Credit notes, returns and rebate rows may be negative: a line whose
+// printed sign is opposite to quantity x price is also compared with the negated expectation.
+export function validateLineItem(it: StoredItem, position: number, rc: LineRateContext): LineVerdict {
+  const q = it.quantity;
+  const p = it.unit_price;
+  const t = it.taxable_amount;
+  if (q === null || p === null || t === null) return { status: "skipped" };
+  const tol = rc.tolerancePaise;
+  const actual = toPaise(t);
+  const disc = it.discount_amount;
+  const cands = lineCandidates(it);
+  const gross = clean(q * p);
+  const within = (expectedPaise: number, relTol: number) => Math.abs(actual - expectedPaise) <= tol + Math.round(Math.abs(expectedPaise) * relTol);
+  const flip = actual !== 0 && gross !== 0 && actual < 0 !== gross < 0; // a return / rebate printed with the opposite sign
+  const withSign = (list: number[]) => (flip ? [...list, ...list.map((e) => -e)] : list);
+
+  // Values exactly as printed in one currency: every reading of the discount, plus gross.
+  const plain = [...cands.map((c) => toPaise(c.net)), toPaise(gross)];
+  const plainOk = withSign(plain);
+  if (plainOk.some((e) => within(e, 0))) return { status: "pass", expectedPaise: plain[0] };
+
+  let rateUsed: number | null = null;
+  if (rc.foreign) {
+    const r = rc.explicitRate ?? rc.impliedRate;
+    if (r === null) return { status: "unverified" };
+    const converted = withSign([
+      ...cands.map((c) => toPaise(c.net * r)), // discount (flat or %) in the invoice currency
+      toPaise(gross * r),
+      toPaise(gross * r - nz(disc)), // flat discount already in INR
+    ]);
+    if (converted.some((e) => within(e, RATE_REL_TOLERANCE))) return { status: "pass", expectedPaise: converted[0] };
+    rateUsed = r;
+  }
+
+  // Reported "expected" uses the primary reading: the explicit type if known, else flat (the original behaviour).
+  const net = (it.discount_type === "PERCENT" ? cands.find((c) => c.reading === "percent") : cands[0])?.net ?? gross;
+  const expected = rateUsed === null ? plain[0] : toPaise(net * rateUsed);
+  const flag: ReviewFlag = {
+    code: "arithmetic_line_mismatch",
+    severity: "warning",
+    field: "taxable_value",
+    itemPosition: position,
+    message: rateUsed === null
+      ? "Quantity x unit price does not match the item's taxable value."
+      : `Quantity x unit price (less discount) x exchange rate ${Math.round(rateUsed * 10000) / 10000} does not match the item's taxable value.`,
+    details: { expected: expected / 100, extracted: actual / 100, ...(rateUsed === null ? {} : { exchangeRate: rateUsed, rateSource: rc.explicitRate !== null ? "printed" : "from other lines" }) },
+  };
+  return { status: "fail", expectedPaise: expected, flag };
+}
+
 export function checkLineItems(items: StoredItem[], ctx: ArithmeticContext): ReviewFlag[] {
   const flags: ReviewFlag[] = [];
-  const tol = ctx.tolerancePaise;
   const foreign = isForeign(ctx.currency, ctx.exchangeRate);
-  const explicit = foreign && hasRate(ctx.exchangeRate) ? ctx.exchangeRate : null;
-  const implied = foreign && explicit === null ? impliedRate(items) : null;
+  const explicitRate = foreign && hasRate(ctx.exchangeRate) ? ctx.exchangeRate : null;
+  const rc: LineRateContext = {
+    tolerancePaise: ctx.tolerancePaise,
+    foreign,
+    explicitRate,
+    impliedRate: foreign && explicitRate === null ? impliedRate(items) : null,
+  };
   let unverified = false;
-
   items.forEach((it, i) => {
-    const q = it.quantity;
-    const p = it.unit_price;
-    const t = it.taxable_amount;
-    if (q === null || p === null || t === null) return;
-    const actual = toPaise(t);
-    const disc = it.discount_amount;
-    const cands = lineCandidates(it);
-    const gross = clean(q * p);
-    const within = (expectedPaise: number, relTol: number) => Math.abs(actual - expectedPaise) <= tol + Math.round(Math.abs(expectedPaise) * relTol);
-
-    // Values exactly as printed in one currency: every reading of the discount, plus gross.
-    const plain = [...cands.map((c) => toPaise(c.net)), toPaise(gross)];
-    if (plain.some((e) => within(e, 0))) return;
-
-    let rateUsed: number | null = null;
-    if (foreign) {
-      const r = explicit ?? implied;
-      if (r === null) {
-        unverified = true; // foreign currency, but nothing to convert with
-        return;
-      }
-      const converted = [
-        ...cands.map((c) => toPaise(c.net * r)), // discount (flat or %) in the invoice currency
-        toPaise(gross * r),
-        toPaise(gross * r - nz(disc)), // flat discount already in INR
-      ];
-      if (converted.some((e) => within(e, RATE_REL_TOLERANCE))) return;
-      rateUsed = r;
-    }
-
-    // Reported "expected" uses the primary reading: the explicit type if known, else flat (the original behaviour).
-    const net = (it.discount_type === "PERCENT" ? cands.find((c) => c.reading === "percent") : cands[0])?.net ?? gross;
-    const expected = rateUsed === null ? plain[0] : toPaise(net * rateUsed);
-    flags.push({
-      code: "arithmetic_line_mismatch",
-      severity: "warning",
-      field: "taxable_value",
-      itemPosition: i + 1,
-      message: rateUsed === null
-        ? "Quantity x unit price does not match the item's taxable value."
-        : `Quantity x unit price (less discount) x exchange rate ${Math.round(rateUsed * 10000) / 10000} does not match the item's taxable value.`,
-      details: { expected: expected / 100, extracted: actual / 100, ...(rateUsed === null ? {} : { exchangeRate: rateUsed, rateSource: explicit !== null ? "printed" : "from other lines" }) },
-    });
+    const v = validateLineItem(it, i + 1, rc);
+    if (v.status === "unverified") unverified = true;
+    else if (v.status === "fail") flags.push(v.flag);
   });
-
   if (unverified) {
     flags.push({
       code: "forex_rate_unverified",
