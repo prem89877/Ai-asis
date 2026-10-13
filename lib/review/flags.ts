@@ -21,8 +21,8 @@ function num(v: string | number | null): number | null {
 }
 
 // `extras` = values the review screen does not edit but the validation engine needs (TCS, TDS, pre-tax charges,
-// round-off, exchange rate). They come from the saved record, so a re-check after an edit never forgets them.
-export type ReviewExtras = Pick<StoredExtracted, "exchange_rate" | "tcs_amount" | "tds_amount" | "pre_tax_charges" | "round_off_amount" | "irn" | "ack_no" | "eway_bill_no">;
+// round-off, net payable, exchange rate). They come from the saved record, so a re-check after an edit never forgets them.
+export type ReviewExtras = Pick<StoredExtracted, "exchange_rate" | "tcs_amount" | "tds_amount" | "pre_tax_charges" | "round_off_amount" | "net_payable_amount" | "irn" | "ack_no" | "eway_bill_no">;
 
 export function toStoredExtracted(h: HeaderValues, fieldStatus: Record<string, FieldMeta>, extras: Partial<ReviewExtras> = {}): StoredExtracted {
   return {
