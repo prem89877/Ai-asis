@@ -28,6 +28,7 @@ export const WARNING_FILTERS = {
   tax_mismatch: [
     "arithmetic_total_mismatch", "arithmetic_subtotal_mismatch", "arithmetic_line_mismatch", "gst_type_mismatch", "cgst_sgst_unequal",
     "item_tax_rate_mismatch", "invoice_tax_rate_mismatch", "tax_type_conflict", "tax_on_bill_of_supply",
+    "tax_allocation_mismatch", "mixed_tax_unreconciled",
   ],
 } as const;
 export type WarningFilter = keyof typeof WARNING_FILTERS;

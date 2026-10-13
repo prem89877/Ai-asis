@@ -20,8 +20,13 @@ function num(v: string | number | null): number | null {
   return v === null || v === "" ? null : Number(v);
 }
 
-export function toStoredExtracted(h: HeaderValues, fieldStatus: Record<string, FieldMeta>): StoredExtracted {
+// `extras` = values the review screen does not edit but the validation engine needs (TCS, TDS, pre-tax charges,
+// round-off, exchange rate). They come from the saved record, so a re-check after an edit never forgets them.
+export type ReviewExtras = Pick<StoredExtracted, "exchange_rate" | "tcs_amount" | "tds_amount" | "pre_tax_charges" | "round_off_amount" | "irn" | "ack_no" | "eway_bill_no">;
+
+export function toStoredExtracted(h: HeaderValues, fieldStatus: Record<string, FieldMeta>, extras: Partial<ReviewExtras> = {}): StoredExtracted {
   return {
+    ...extras,
     vendor_name: h.vendor_name as string | null,
     buyer_name: h.buyer_name as string | null,
     vendor_gstin: h.vendor_gstin as string | null,
@@ -47,8 +52,8 @@ export function toStoredExtracted(h: HeaderValues, fieldStatus: Record<string, F
   };
 }
 
-export function computeReviewFlags(h: HeaderValues, fieldStatus: Record<string, FieldMeta>, items: StoredItem[], opts: FlagOptions, now: Date = new Date()): ReviewFlag[] {
-  const doc = toStoredExtracted(h, fieldStatus);
+export function computeReviewFlags(h: HeaderValues, fieldStatus: Record<string, FieldMeta>, items: StoredItem[], opts: FlagOptions, now: Date = new Date(), extras: Partial<ReviewExtras> = {}): ReviewFlag[] {
+  const doc = toStoredExtracted(h, fieldStatus, extras);
   const flags: ReviewFlag[] = [];
   const memo = doc.document_type === "credit_note" || doc.document_type === "debit_note";
 

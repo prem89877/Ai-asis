@@ -2,8 +2,8 @@
 //
 // Covered: CGST+SGST (same state) vs IGST (different states), CGST = SGST, tax charged without a supplier GSTIN,
 // tax on a bill of supply, no tax charged, item rate vs item tax, item rates vs invoice tax, unusual rates.
-// Not modelled (flagged only through the arithmetic checks): reverse charge, TCS, round-off, freight/packing lines,
-// composition-scheme specifics, e-invoice/IRN checks. See docs/PHASE4_SETUP.md.
+// TCS, TDS, round-off, pre-tax charges, mixed IGST + CGST/SGST and e-invoice metadata are handled by gst-engine.ts.
+// Not modelled: reverse charge, composition-scheme specifics. See docs/GST_ENGINE.md.
 import { toPaise } from "../extraction/normalize.ts";
 import type { ReviewFlag, StoredExtracted, StoredItem } from "../extraction/types.ts";
 
