@@ -9,6 +9,7 @@
 //   cross check  : tripleCheckTax()         printed header tax  vs  printed line tax  vs  rate x taxable  vs  state rule
 // An invoice is shown as "verified" only when every method that could run agrees. Disagreement is never hidden.
 import { checkLineItems, hasRate, isForeign } from "./arithmetic.ts";
+import { describeIdentifierProblem, isValidAckNo, isValidEwayBill, isValidIrn } from "./identifiers.ts";
 import { toPaise } from "./normalize.ts";
 import type { ReviewFlag, StoredExtracted, StoredItem } from "./types.ts";
 
@@ -334,11 +335,91 @@ function checkNetPayable(e: StoredExtracted, actual: number, tier: TotalTier, td
 
 export function validateEInvoiceMetadata(e: StoredExtracted): ReviewFlag[] {
   const flags: ReviewFlag[] = [];
-  const note = (code: string, field: string, message: string) => flags.push({ code, severity: "info", field, message });
-  if (e.irn && !/^[0-9a-fA-F]{64}$/.test(e.irn)) note("invalid_irn", "irn", "The IRN is not 64 hexadecimal characters. Check the QR code or the original.");
-  if (e.ack_no && !/^[0-9]{9,15}$/.test(e.ack_no)) note("invalid_ack_no", "ack_no", "The acknowledgement number is not 9 to 15 digits. Check the original.");
-  if (e.eway_bill_no && !/^[0-9]{12}$/.test(e.eway_bill_no)) note("invalid_eway_bill_no", "eway_bill_no", "The e-way bill number is not 12 digits. Check the original.");
+  const note = (code: string, field: string, message: string, value: string) => flags.push({ code, severity: "info", field, message, details: { length: value.length } });
+  if (e.irn && !isValidIrn(e.irn)) note("invalid_irn", "irn", describeIdentifierProblem("irn", e.irn) as string, e.irn);
+  if (e.ack_no && !isValidAckNo(e.ack_no)) note("invalid_ack_no", "ack_no", describeIdentifierProblem("ack_no", e.ack_no) as string, e.ack_no);
+  if (e.eway_bill_no && !isValidEwayBill(e.eway_bill_no)) note("invalid_eway_bill_no", "eway_bill_no", describeIdentifierProblem("eway_bill_no", e.eway_bill_no) as string, e.eway_bill_no);
   return flags;
+}
+
+// ---- Negative lines (returns, rebates, trade-volume discounts) ---------------------------------------------------------------
+// A negative line is normal on some invoices, so it is NOT flagged line by line. It is judged once per invoice:
+//   - credit / debit notes: negative figures are expected, nothing to say;
+//   - signs on the line agree and the item taxable values (negative lines included) add up to the invoice taxable value:
+//     believable, silent, recorded in the summary only;
+//   - a line whose signs disagree (e.g. negative taxable value but positive tax), or an invoice that adds up only when the
+//     negative lines are made positive: the minus sign was probably misread (a "-" in an empty cell is the usual cause) => warning;
+//   - otherwise (nothing to tie to): ONE information note listing the item numbers.
+
+export interface NegativeLines {
+  positions: number[]; // 1-based item numbers
+  status: "confirmed" | "unconfirmed" | "suspect" | "not_applicable";
+  flags: ReviewFlag[];
+}
+
+const isNeg = (v: number | null | undefined): boolean => has(v) && v < 0;
+
+function itemList(positions: number[]): string {
+  return (positions.length === 1 ? "Item " : "Items ") + positions.join(", ");
+}
+
+// Does the sum of item taxable values tie to the invoice taxable value (same candidates as the subtotal check)?
+function itemsTie(e: StoredExtracted, itemsSum: number, items: StoredItem[], tol: number): boolean {
+  const header = e.taxable_amount;
+  if (header === null) return false;
+  const charges = has(e.pre_tax_charges) ? toPaise(e.pre_tax_charges) : null;
+  const candidates = [toPaise(header)];
+  if (e.discount_amount !== null) candidates.push(toPaise(header) + toPaise(e.discount_amount));
+  if (charges !== null) candidates.push(toPaise(header) - charges, toPaise(header) + charges);
+  return candidates.some((c) => Math.abs(itemsSum - c) <= tol + items.length);
+}
+
+export function validateNegativeLines(e: StoredExtracted, items: StoredItem[], tolerancePaise: number): NegativeLines {
+  const memo = e.document_type === "credit_note" || e.document_type === "debit_note";
+  const positions = items.map((it, i) => (isNeg(it.taxable_amount) || isNeg(it.quantity) || isNeg(it.line_total) ? i + 1 : 0)).filter((n) => n > 0);
+  if (memo || positions.length === 0) return { positions, status: "not_applicable", flags: [] };
+
+  // Signs on one line must agree: taxable value, tax and line total are all negative together.
+  const mixedSigns = positions.filter((pos) => {
+    const it = items[pos - 1];
+    const parts = [it.taxable_amount, it.gst_amount, it.line_total].filter((v): v is number => has(v) && v !== 0);
+    return parts.some((v) => v < 0) && parts.some((v) => v > 0);
+  });
+
+  const known = items.length > 0 && items.every((it) => it.taxable_amount !== null);
+  let direct: boolean | null = null;
+  let flipped: boolean | null = null;
+  if (known && e.taxable_amount !== null) {
+    const sum = items.reduce((a, it) => a + toPaise(it.taxable_amount as number), 0);
+    const flipSum = items.reduce((a, it, i) => a + (positions.includes(i + 1) ? Math.abs(toPaise(it.taxable_amount as number)) : toPaise(it.taxable_amount as number)), 0);
+    direct = itemsTie(e, sum, items, tolerancePaise);
+    flipped = itemsTie(e, flipSum, items, tolerancePaise);
+  }
+
+  const flags: ReviewFlag[] = [];
+  if (mixedSigns.length > 0) {
+    flags.push({
+      code: "negative_line_suspect", severity: "warning",
+      message: `${itemList(mixedSigns)}: the minus sign is on some amounts of the line but not on others. A "-" in an empty cell may have been read as a minus sign. Compare with the original.`,
+      details: { positions: mixedSigns },
+    });
+    return { positions, status: "suspect", flags };
+  }
+  if (direct === false && flipped === true) {
+    flags.push({
+      code: "negative_line_suspect", severity: "warning",
+      message: `${itemList(positions)} read as negative, but the item total matches the invoice only if they are positive. A "-" may have been read as a minus sign. Compare with the original.`,
+      details: { positions },
+    });
+    return { positions, status: "suspect", flags };
+  }
+  if (direct === true) return { positions, status: "confirmed", flags };
+  flags.push({
+    code: "negative_line_items", severity: "info",
+    message: `${itemList(positions)} ${positions.length === 1 ? "is a negative line" : "are negative lines"} (return, rebate or discount). ${known && e.taxable_amount !== null ? "The item total does not match the invoice taxable value, see the other checks." : "They could not be tied to the invoice totals."}`,
+    details: { positions },
+  });
+  return { positions, status: "unconfirmed", flags };
 }
 
 // ---- Cross check of the invoice's tax by independent methods -----------------------------------------------------------
@@ -401,6 +482,7 @@ export interface ValidationSummary {
   slabs: Slab[];
   verification: Verification;
   line_checks: { checked: number; failed: number };
+  negative_lines?: { positions: number[]; status: NegativeLines["status"] };
 }
 
 export interface InvoiceValidation {
@@ -418,9 +500,10 @@ export function validateInvoice(data: InvoiceData, opts: EngineOptions): Invoice
   const alloc = validateTaxAllocation(e, items, opts.tolerancePaise);
   const totals = validateInvoiceTotals(e, items, opts);
   const meta = validateEInvoiceMetadata(e);
+  const neg = validateNegativeLines(e, items, opts.tolerancePaise);
   const verification = tripleCheckTax(e, items, opts.tolerancePaise);
 
-  const flags: ReviewFlag[] = [...lineFlags, ...totals.flags, ...alloc.flags, ...meta]; // the cross-check verdict is kept in the summary, not as a flag, so clean invoices stay flag-free
+  const flags: ReviewFlag[] = [...lineFlags, ...totals.flags, ...alloc.flags, ...neg.flags, ...meta]; // the cross-check verdict is kept in the summary, not as a flag, so clean invoices stay flag-free
   const lineFails = lineFlags.filter((f) => f.code === "arithmetic_line_mismatch").length;
   const summary: ValidationSummary = {
     version: 1,
@@ -437,6 +520,7 @@ export function validateInvoice(data: InvoiceData, opts: EngineOptions): Invoice
     slabs: slabSummary(items, alloc.assignment),
     verification,
     line_checks: { checked: items.length, failed: lineFails },
+    ...(neg.positions.length > 0 && neg.status !== "not_applicable" ? { negative_lines: { positions: neg.positions, status: neg.status } } : {}),
   };
   return {
     valid: !flags.some((f) => f.severity === "error" || f.severity === "warning"),

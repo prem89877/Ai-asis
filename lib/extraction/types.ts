@@ -59,10 +59,13 @@ export const ITEM_NUMBER_FIELDS = [
 //    net_payable_amount = grand_total - tds_amount. See validateInvoiceTotals() in gst-engine.ts for the two-tier check.
 //  - text fields are e-invoice / e-way bill metadata. They are stored as text only and never enter any calculation.
 export const OPTIONAL_AMOUNT_FIELDS = ["exchange_rate", "tcs_amount", "tds_amount", "pre_tax_charges", "round_off_amount", "net_payable_amount"] as const;
-// The four bottom-line fields of the invoice summary (TCS, TDS, round-off, net payable). The prompt and the response schema
+// The four bottom-line fields of the invoice summary (TCS, TDS, round-off, net payable). The prompts and the response schema
 // describe them explicitly so the model decides for each one whether it is printed.
 export const BOTTOM_LINE_FIELDS = ["tcs_amount", "tds_amount", "round_off_amount", "net_payable_amount"] as const;
 export const OPTIONAL_TEXT_FIELDS = ["irn", "ack_no", "eway_bill_no"] as const;
+// The grand total printed in words ("Rupees One Thousand ... Only"). Never stored as a column: it is a second, separate print
+// of the grand total that the code turns into a number and uses as one more witness (see total-check.ts).
+export const EXTRA_TEXT_FIELDS = ["amount_in_words"] as const;
 // Optional per-item text fields: discount_type is PERCENT or FLAT, applied_tax_type is IGST or CGST_SGST.
 export const ITEM_OPTIONAL_TEXT_FIELDS = ["discount_type", "applied_tax_type"] as const;
 export type OptionalAmountField = (typeof OPTIONAL_AMOUNT_FIELDS)[number];
@@ -83,8 +86,13 @@ export type ModelOutput = {
   line_items: ModelItem[];
 } & { [K in HeaderTextField]: ModelField<string> } & {
   [K in HeaderAmountField]: ModelField<number>;
-} & { [K in OptionalAmountField]?: ModelField<number> } & { [K in OptionalTextField]?: ModelField<string> };
+} & { [K in OptionalAmountField]?: ModelField<number> } & { [K in OptionalTextField]?: ModelField<string> } & { amount_in_words?: ModelField<string> };
 
+// Output of the blind "key figures" reading: only the totals block, the e-invoice identifiers and the amount in words.
+// Every key may be absent (the reading abstains on it).
+export type KeyFigures = { [K in HeaderAmountField]?: ModelField<number> } & { [K in OptionalAmountField]?: ModelField<number> } & {
+  [K in OptionalTextField | "amount_in_words"]?: ModelField<string>;
+};
 // ---- Stored (normalized) shapes -------------------------------------------------------------
 
 // value = readable value, zero = genuine zero, missing / unreadable as reported by the model,

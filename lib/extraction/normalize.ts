@@ -2,6 +2,7 @@
 // Normalization only trims text, upper-cases GSTINs and checks formats. It never changes an amount.
 // Anything that cannot be stored safely becomes null with state "invalid" and a review flag.
 import { GSTIN_AUTO_CORRECTED_LABEL, suggestGstinFixes, suggestionText, validateAndRepairGSTIN } from "./gstin.ts";
+import { cleanIdentifier } from "./identifiers.ts";
 import { HEADER_AMOUNT_FIELDS, HEADER_TEXT_FIELDS } from "./types.ts";
 import type { StoredItem as StoredItemType } from "./types.ts";
 import type {
@@ -228,12 +229,26 @@ export function normalizeExtraction(model: ModelOutput, opts: NormalizeOptions):
     const f = model[key];
     extras[key] = f ? readAmount(c, key, f, { dp: 2, max: MAX_ABS_AMOUNT, allowNegative: memo || key === "round_off_amount" }) : null;
   }
-  // e-invoice / e-way bill metadata: text only, stripped of spaces and dashes, and never used in any calculation.
+  // e-invoice / e-way bill metadata: text only, never used in any calculation. Labels ("IRN:"), spaces, line breaks and dashes are
+  // removed; a misread letter inside an IRN (O for 0, I or l for 1) is repaired only when that gives exactly 64 hex characters,
+  // and the repair is reported. A value that is still wrong is kept as read and flagged by the validation engine.
   const meta2: Record<string, string | null> = {};
   for (const key of ["irn", "ack_no", "eway_bill_no"] as const) {
     const f = model[key];
     const v = f ? readText(c, key, f) : null;
-    meta2[key] = v === null ? null : v.replace(/[\s-]+/g, "");
+    if (v === null) {
+      meta2[key] = null;
+      continue;
+    }
+    const cleaned = cleanIdentifier(key, v);
+    meta2[key] = cleaned.value;
+    if (cleaned.repaired) {
+      c.flags.push({
+        code: "irn_lookalike_repaired", severity: "info", field: key,
+        message: "Letters that cannot be part of an IRN were read as digits (O as 0, I or l as 1). Compare the IRN with the QR code or the original.",
+        details: { original: cleaned.repaired.from, repaired: cleaned.repaired.to },
+      });
+    }
   }
   // INR invoices carry exchange rate 1.0 by default. A foreign currency without a printed rate stays null: never guessed.
   if (exchangeRate === null && (currencyEarly(text.currency) === "INR")) exchangeRate = 1;
@@ -317,7 +332,8 @@ export function normalizeExtraction(model: ModelOutput, opts: NormalizeOptions):
         c.flags.push({ code: "invalid_hsn", severity: "info", field: "hsn_sac", itemPosition: position, message: "The HSN/SAC is not 4 to 8 digits, so it was not saved." });
       }
     }
-    // Returns, rebates and trade-volume discounts print negative lines: allowed, noted once as information.
+    // Returns, rebates and trade-volume discounts print negative lines: allowed here. Whether a negative line is believable
+    // (signs agree, item total still ties to the invoice) is judged once per invoice in gst-engine.ts (validateNegativeLines).
     const neg = { allowNegative: true };
     const quantity = readAmount(ic, "quantity", mi.quantity, { dp: 3, max: MAX_ABS_QUANTITY, itemPosition: position, ...neg });
     const unitPrice = readAmount(ic, "unit_price", mi.unit_price, { dp: 4, max: MAX_ABS_AMOUNT, itemPosition: position, ...neg });
@@ -325,9 +341,6 @@ export function normalizeExtraction(model: ModelOutput, opts: NormalizeOptions):
     const taxable = readAmount(ic, "taxable_value", mi.taxable_value, { dp: 2, max: MAX_ABS_AMOUNT, itemPosition: position, ...neg });
     const taxAmount = readAmount(ic, "tax_amount", mi.tax_amount, { dp: 2, max: MAX_ABS_AMOUNT, itemPosition: position, ...neg });
     const lineTotal = readAmount(ic, "line_total", mi.line_total, { dp: 2, max: MAX_ABS_AMOUNT, itemPosition: position, ...neg });
-    if ((taxable !== null && taxable < 0) || (quantity !== null && quantity < 0) || (lineTotal !== null && lineTotal < 0)) {
-      c.flags.push({ code: "negative_line_item", severity: "info", itemPosition: position, message: "This line is negative (return, rebate or discount line)." });
-    }
     const discountType = mi.discount_type ? normalizeDiscountType(readText(ic, "discount_type", mi.discount_type)) : null;
     const appliedTax = mi.applied_tax_type ? normalizeAppliedTaxType(readText(ic, "applied_tax_type", mi.applied_tax_type)) : null;
 
