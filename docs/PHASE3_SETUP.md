@@ -163,3 +163,19 @@ A GSTIN whose check digit fails is no longer always called a misread:
 - Both readings gave the same 15 characters, or a reviewer typed/corrected the value: shown as an **info** note (`gstin_checksum_note`), the invoice is not forced into review and the "GSTIN invalid" chip does not appear.
 - Only one reading exists (second check off or failed): the old **warning** with the "misread" wording stays, because a misread is then possible.
 - A wrong GSTIN *format* (not 15 valid characters) is still always a warning.
+
+## Foreign-currency invoices, GSTIN suggestions, totals
+
+**Line items** (`lib/extraction/arithmetic.ts`). Order: gross = qty x unit price; net = gross - trade discount; taxable (INR) = net x exchange rate; tax = taxable x GST % (checked in `lib/review/gst.ts`).
+
+- The model has an optional `exchange_rate` field (INR per 1 unit of the invoice currency, only if the document prints one). It is kept inside the stored extraction, no new database column.
+- Currency is not INR, or a rate other than 1 is printed: each line is accepted if it matches the plain amount, or the amount converted at the printed rate (discount in foreign currency or already in INR; 0.05% tolerance for rate rounding).
+- No printed rate: the rate that the item lines agree on (median of taxable / net) is used. A line that disagrees with the others is flagged (`arithmetic_line_mismatch`, `details.rateSource = "from other lines"`).
+- Foreign currency, nothing to convert with (for example one line, no rate): no warning, only the info note `forex_rate_unverified`.
+- INR invoices behave exactly as before.
+
+**Totals.** taxable + CGST + SGST + IGST + Cess = grand total, tolerance `EXTRACTION_TOLERANCE_PAISE` (default INR 1.00). Also accepted: bill-level discount either way, grand total printed in the foreign currency (when a rate is printed), and the item sum standing in for an unread header taxable value (`details.taxableFromItems`).
+
+**GSTIN** (`lib/extraction/gstin.ts`). The Modulo-36 check stays. `suggestGstinFixes()` suggests a GSTIN only when changing exactly one character gives a valid one: the check digit, or a look-alike (O/0, I/1, Z/2, B/8, S/5, G/6, ...). Suggestions appear in the flag text and `details.suggestions`; they are never applied automatically. If two readings agree on the same 15 characters and the model confidence is above 95% the flag becomes the info note `gstin_checksum_note` ("GSTIN Checksum Mismatch (Possible Print Error)"). A wrong format is still a warning.
+
+Limits: the review screen recomputes flags from saved values and does not have the printed rate, so there foreign lines are checked with the rate the lines agree on. Cess at item level is not extracted; the item GST check compares CGST/SGST/IGST only.
