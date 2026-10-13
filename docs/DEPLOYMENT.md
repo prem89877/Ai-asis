@@ -63,7 +63,7 @@ Set them in Vercel > Project > Settings > Environment Variables (Production, and
 | `INTEGRATION_ENCRYPTION_KEY_PREVIOUS` | old key while rotating | No | decrypt-only |
 | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` | Google Cloud Console > Credentials | Only for Google Sheets | enable Google Sheets API |
 | `MICROSOFT_OAUTH_CLIENT_ID`, `MICROSOFT_OAUTH_CLIENT_SECRET`, `MICROSOFT_OAUTH_TENANT` | Microsoft Entra > App registrations | Only for Excel | tenant `common` or your tenant id. Secret **Value**, not Secret ID |
-| `TALLY_EXPORT_ENABLED` | leave `false` | No | experimental; never import-tested |
+| `TALLY_EXPORT_ENABLED` | leave unset | No | Tally export (Export page > "Export as" > Tally) is ON by default. Set `false` to turn it off. Experimental; never import-tested |
 | `AI_ASIS_DEBUG_ERRORS` | **do not set** | No | local `next dev` only; ignored in production builds |
 
 Never set: anything starting with `NEXT_PUBLIC_` that holds a secret. The automated test `tests/security-static.test.mjs` fails if a new `NEXT_PUBLIC_` name appears or a key-like string is committed.

@@ -43,7 +43,7 @@
 
 ## Tally-compatible export (experimental, off by default)
 
-Set `TALLY_EXPORT_ENABLED=true` to show it. It builds **purchase vouchers** from verified INR invoices; it never connects to or posts into Tally.
+It is on by default (Export page > "Export as" > Tally); set `TALLY_EXPORT_ENABLED=false` to hide it. It builds **purchase vouchers** from verified INR invoices; it never connects to or posts into Tally.
 
 | Voucher field | From |
 |---|---|
