@@ -136,3 +136,30 @@ It prints, per field, counts of `correct`, `wrong`, `abstained` (model said miss
 - Encrypted PDFs are rejected (the check cannot tell owner-password-only files from open-password files).
 - Duplicate detection only compares against already-extracted invoices of the same firm.
 - Human editing/verification, export, billing and Google/Microsoft sync are not part of this phase.
+
+
+## Second check (two-layer protection against misread characters)
+
+Every invoice is now read **twice**. The second call sends the same document plus the first reading (as untrusted data) and asks the model to read it again independently, with a list of look-alike characters (2/Z, 0/O, 1/I, 5/S, 8/B, ...) and the GSTIN layout. The two readings are then compared **in code** (`lib/extraction/verify.ts`); the model never has the last word.
+
+| Situation | Result |
+|---|---|
+| Both readings give the same value | Kept. Stored with `field_status.<field>.source = "recheck"`. |
+| Readings differ, and a rule proves one right (GSTIN check digit, valid date, valid HSN, invoice arithmetic adds up) | The proven value is used. If the second reading won, an info note `recheck_corrected` is added. |
+| Readings differ, nothing can decide | First value kept, confidence lowered to 0.5, warning `recheck_mismatch` showing both values. |
+| Only one reading found a value | Kept with confidence 0.6 and a warning. |
+| Different number of item rows | First reading's rows kept, warning `recheck_item_count`. |
+| Item description/unit wording differs | Ignored (normal wording noise). |
+| Second call fails, times out or returns invalid JSON | First reading is saved as before, info note `recheck_unavailable`. No retry loop. |
+
+- Cost: one extra Gemini call per invoice (shown in `usage_records` with outcome `verify_ok` / `verify_<error>`). Set `EXTRACTION_VERIFY=off` to go back to a single call.
+- Time: the second call only starts if at least 12 s of `EXTRACTION_DEADLINE_MS` is left. With the defaults (52 s) a normal invoice has room for both calls.
+- No migration is needed.
+
+### "A character may have been misread" message
+
+A GSTIN whose check digit fails is no longer always called a misread:
+
+- Both readings gave the same 15 characters, or a reviewer typed/corrected the value: shown as an **info** note (`gstin_checksum_note`), the invoice is not forced into review and the "GSTIN invalid" chip does not appear.
+- Only one reading exists (second check off or failed): the old **warning** with the "misread" wording stays, because a misread is then possible.
+- A wrong GSTIN *format* (not 15 valid characters) is still always a warning.
