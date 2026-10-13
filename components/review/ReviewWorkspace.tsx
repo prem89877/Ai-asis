@@ -9,7 +9,7 @@ import { formatDay, formatInr } from "@/lib/format";
 import { DOCUMENT_TYPE_LABEL, EDITABLE_DOCUMENT_TYPES, HEADER_FIELDS, ITEM_FIELDS, MAX_ITEMS } from "@/lib/review/fields";
 import type { HeaderColumn, ItemColumn } from "@/lib/review/fields";
 
-interface FieldMeta { state: string; confidence: number }
+interface FieldMeta { state: string; confidence: number; autoCorrected?: { from: string; to: string } }
 interface Flag { code: string; severity: "error" | "warning" | "info"; field?: string; itemPosition?: number; message: string }
 interface Duplicate { id: string; original_filename: string; invoice_number: string | null; vendor_name: string | null; invoice_date: string | null; total_amount: number | null; status: string }
 interface Loaded {
@@ -233,7 +233,7 @@ export function ReviewWorkspace({ invoiceId, neighborIds, onNavigate, onClose, o
                 {sortedFlags.length > 0 && (
                   <section aria-labelledby="flags-title">
                     <h3 id="flags-title" className="text-sm font-semibold">Warnings ({sortedFlags.length})</h3>
-                    <p className="mt-0.5 text-xs text-ink-muted">Nothing was changed automatically. Check each against the original.</p>
+                    <p className="mt-0.5 text-xs text-ink-muted">{flags.some((x) => x.code === "gstin_auto_corrected") ? "Only a GSTIN check digit was fixed automatically (you can switch back below). Check each against the original." : "Nothing was changed automatically. Check each against the original."}</p>
                     <ul className="mt-2 space-y-2">
                       {sortedFlags.map((f, i) => {
                         const { icon: Icon, cls } = flagStyle[f.severity];
@@ -296,6 +296,21 @@ export function ReviewWorkspace({ invoiceId, neighborIds, onNavigate, onClose, o
                                   className={`mt-1 h-11 w-full rounded-lg border bg-white px-3 text-sm ${f.kind === "amount" ? "tabular-nums" : ""} ${attention ? "border-amber-500 ring-1 ring-amber-300" : "border-slate-300"}`}
                                 />
                               )}
+                              {f.kind === "gstin" && meta?.autoCorrected && (() => {
+                                const ac = meta.autoCorrected;
+                                const showingRaw = header[f.column] === ac.from;
+                                return (
+                                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+                                    <span className={`rounded-full px-2 py-0.5 font-medium ${showingRaw ? "bg-slate-100 text-ink-muted" : "bg-success-soft text-success-ink"}`}>
+                                      {showingRaw ? "Raw extracted GSTIN (checksum fails)" : "GSTIN Auto-Corrected (Checksum Fixed)"}
+                                    </span>
+                                    <button type="button" onClick={() => setH(f.column, showingRaw ? ac.to : ac.from)} className="text-brand underline">
+                                      {showingRaw ? "Use validated GSTIN" : "Use raw extracted GSTIN"}
+                                    </button>
+                                    <span className="w-full text-ink-muted">Raw: {ac.from} · Validated: {ac.to}</span>
+                                  </div>
+                                );
+                              })()}
                               {meta?.state === "missing" && !header[f.column] && <p className="mt-1 text-xs text-ink-muted">Not found on the document.</p>}
                               {meta?.state === "unreadable" && !header[f.column] && <p className="mt-1 text-xs text-amber-800">Unreadable. Enter it from the original.</p>}
                               {low && <p className="mt-1 text-xs text-amber-800">Read with low confidence.</p>}
