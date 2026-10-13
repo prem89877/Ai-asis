@@ -103,7 +103,7 @@ export function buildVouchers(invoices: ExportInvoice[], config: TallyConfig): {
 
     const sum = parts.reduce((s, p) => s + p.paise, 0);
     const diff = total - sum; // > 0: total is more than the parts, so a round-off DEBIT is needed
-    if (Math.abs(diff) > ROUND_OFF_LIMIT_PAISE) { skip("Taxable value plus taxes does not match the invoice total."); continue; }
+    if (Math.abs(diff) > ROUND_OFF_LIMIT_PAISE) { skip(`Taxable value plus taxes is ${money(sum)} but the invoice total is ${money(total)} (difference ${money(Math.abs(diff))}). Correct the figures in Review, verify again, then export.`); continue; }
 
     const entries: TallyEntry[] = [{ ledger: inv.vendor_name.trim(), side: "Cr", paise: total, isParty: true }];
     for (const p of parts) entries.push({ ledger: p.ledger, side: "Dr", paise: p.paise, isParty: false });
