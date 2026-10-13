@@ -1,4 +1,4 @@
-// Invoice arithmetic: line items (INR and foreign currency) and the invoice totals.
+// Invoice arithmetic: line items (INR and foreign currency). Invoice totals live in gst-engine.ts.
 // Checks only ADD flags. They never change a value.
 //
 // Calculation order used for every line (same as normal accounting practice):
@@ -10,7 +10,7 @@
 //   3. taxable = net x exchange rate                         (INR; rate = 1 for INR invoices)
 //   4. tax     = taxable x GST %                             (checked in lib/review/gst.ts)
 import { toPaise } from "./normalize.ts";
-import type { ReviewFlag, StoredExtracted, StoredItem } from "./types.ts";
+import type { ReviewFlag, StoredItem } from "./types.ts";
 
 // Exchange rates are printed with 2 to 4 decimals, so a converted amount can be off by this fraction.
 const RATE_REL_TOLERANCE = 0.0005;
@@ -204,52 +204,6 @@ export function checkLineItems(items: StoredItem[], ctx: ArithmeticContext): Rev
   return flags;
 }
 
-// Invoice totals: item taxable values -> header taxable value -> header taxes -> grand total.
-export function checkTotals(extracted: StoredExtracted, items: StoredItem[], ctx: ArithmeticContext): ReviewFlag[] {
-  const flags: ReviewFlag[] = [];
-  const tol = ctx.tolerancePaise;
-  const fs = extracted.field_status;
-  const foreignRate = isForeign(ctx.currency, ctx.exchangeRate) && hasRate(ctx.exchangeRate) ? ctx.exchangeRate : null;
-  const itemsKnown = items.length > 0 && items.every((it) => it.taxable_amount !== null);
-  const itemsSum = itemsKnown ? items.reduce((a, it) => a + toPaise(it.taxable_amount as number), 0) : null;
-
-  const header = extracted.taxable_amount;
-  if (header !== null && itemsSum !== null) {
-    const candidates = [toPaise(header)];
-    if (extracted.discount_amount !== null) candidates.push(toPaise(header) + toPaise(extracted.discount_amount));
-    if (!candidates.some((cnd) => Math.abs(itemsSum - cnd) <= tol)) {
-      flags.push({
-        code: "arithmetic_subtotal_mismatch",
-        severity: "error",
-        field: "taxable_value",
-        message: "The item taxable values do not add up to the invoice taxable value.",
-        details: { itemsSum: itemsSum / 100, extracted: header / 100 },
-      });
-    }
-  }
-
-  // The invoice taxable value, or (when it was not read) the sum of the items.
-  const base0 = header !== null ? toPaise(header) : itemsSum;
-  const total = extracted.total_amount;
-  if (total !== null && base0 !== null) {
-    const taxes = [extracted.cgst_amount, extracted.sgst_amount, extracted.igst_amount, extracted.cess_amount];
-    const taxPaise = taxes.reduce<number>((a, v) => a + (v === null ? 0 : toPaise(v)), 0);
-    const base = base0 + taxPaise; // taxable + CGST + SGST + IGST + Cess
-    const candidates = [{ value: base, rel: 0 }];
-    if (extracted.discount_amount !== null) candidates.push({ value: base - toPaise(extracted.discount_amount), rel: 0 });
-    // Grand total printed in the foreign currency while taxable and taxes are in INR.
-    if (foreignRate !== null) candidates.push({ value: Math.round(base / foreignRate), rel: RATE_REL_TOLERANCE });
-    const actual = toPaise(total);
-    if (!candidates.some((c) => Math.abs(actual - c.value) <= tol + Math.round(Math.abs(c.value) * c.rel))) {
-      const absent = (["cgst", "sgst", "igst", "cess"] as const).filter((k) => fs[k]?.state === "missing");
-      flags.push({
-        code: "arithmetic_total_mismatch",
-        severity: "error",
-        field: "grand_total",
-        message: "Taxable value plus taxes does not equal the grand total.",
-        details: { expected: base / 100, extracted: actual / 100, taxFieldsNotFound: absent, ...(header === null ? { taxableFromItems: true } : {}) },
-      });
-    }
-  }
-  return flags;
-}
+// Invoice totals (item sum -> taxable value -> taxes -> grand total / net payable, with TCS, TDS and round-off) are checked by
+// validateInvoiceTotals() in gst-engine.ts. The old strict Taxable + GST = Total check that lived here was removed: it ignored
+// TCS, TDS and round-off and raised false mismatches on enterprise invoices.

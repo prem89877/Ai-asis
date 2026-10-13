@@ -78,6 +78,7 @@ export function createSupabaseStore(admin: SupabaseClient): ExtractionStore {
             tds_amount: e.tds_amount ?? null,
             pre_tax_charges: e.pre_tax_charges ?? null,
             round_off_amount: e.round_off_amount ?? null,
+            net_payable_amount: e.net_payable_amount ?? null,
             irn: e.irn ?? null,
             ack_no: e.ack_no ?? null,
             eway_bill_no: e.eway_bill_no ?? null,

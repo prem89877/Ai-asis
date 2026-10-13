@@ -1,8 +1,8 @@
 // Strict validation of the model's JSON and the schema sent to Gemini.
 // The model is untrusted: anything that does not match exactly is rejected, never repaired.
 import {
+  BOTTOM_LINE_FIELDS,
   DOCUMENT_TYPES,
-  EXTRA_TEXT_FIELDS,
   HEADER_AMOUNT_FIELDS,
   HEADER_TEXT_FIELDS,
   ITEM_NUMBER_FIELDS,
@@ -11,7 +11,7 @@ import {
   OPTIONAL_AMOUNT_FIELDS,
   OPTIONAL_TEXT_FIELDS,
 } from "./types.ts";
-import type { FieldStatus, KeyFigures, ModelOutput } from "./types.ts";
+import type { FieldStatus, ModelOutput } from "./types.ts";
 
 export const MAX_LINE_ITEMS = 200;
 const MAX_TEXT = 500;
@@ -75,12 +75,11 @@ export function validateModelOutput(input: unknown): ValidationResult {
   const errors: string[] = [];
   if (!isRecord(input)) return { ok: false, errors: ["root: must be an object"] };
 
-  // Optional extras (exchange rate, TCS, TDS, pre-tax charges, round-off, IRN, ack no, e-way bill no): older readings
+  // Optional extras (exchange rate, TCS, TDS, pre-tax charges, round-off, net payable, IRN, ack no, e-way bill no): older readings
   // and plain INR invoices do not have them. When present they are checked exactly like every other field.
-  checkKeys(input, ["document_type", "line_items", ...HEADER_TEXT_FIELDS, ...HEADER_AMOUNT_FIELDS], "root", errors, [...OPTIONAL_AMOUNT_FIELDS, ...OPTIONAL_TEXT_FIELDS, ...EXTRA_TEXT_FIELDS]);
+  checkKeys(input, ["document_type", "line_items", ...HEADER_TEXT_FIELDS, ...HEADER_AMOUNT_FIELDS], "root", errors, [...OPTIONAL_AMOUNT_FIELDS, ...OPTIONAL_TEXT_FIELDS]);
   for (const key of OPTIONAL_AMOUNT_FIELDS) if (key in input) checkField(input[key], "number", key, errors);
   for (const key of OPTIONAL_TEXT_FIELDS) if (key in input) checkField(input[key], "string", key, errors);
-  for (const key of EXTRA_TEXT_FIELDS) if (key in input) checkField(input[key], "string", key, errors);
 
   if (typeof input.document_type !== "string" || !(DOCUMENT_TYPES as readonly string[]).includes(input.document_type)) {
     errors.push("root.document_type: not an allowed value");
@@ -117,9 +116,19 @@ export function validateModelOutput(input: unknown): ValidationResult {
 
 // ---- Gemini responseSchema (OpenAPI subset). Validation above stays the real gate. ----------
 
-function fieldSchema(valueType: "STRING" | "NUMBER") {
+// Plain-language descriptions of the invoice bottom-line summary fields. They are sent to the model so that each of the four
+// is read explicitly (printed or not) instead of being skipped. They describe the field; they never ask the model to calculate.
+export const BOTTOM_LINE_DESCRIPTIONS: Record<(typeof BOTTOM_LINE_FIELDS)[number], string> = {
+  tcs_amount: "Tax Collected at Source (Sec 206C) as printed in the bottom summary. Added after tax and already inside grand_total. Positive number.",
+  tds_amount: "Tax Deducted at Source / withholding (Sec 194Q) as printed in the bottom summary. Deducted from the payment, NOT inside grand_total. Positive number.",
+  round_off_amount: "Printed round-off / rounding adjustment. Negative when it reduces the total, positive when it increases it.",
+  net_payable_amount: "Amount payable after the TDS deduction, only when printed as its own figure. Missing when the document shows a single total.",
+};
+
+function fieldSchema(valueType: "STRING" | "NUMBER", description?: string) {
   return {
     type: "OBJECT",
+    ...(description ? { description } : {}),
     properties: {
       status: { type: "STRING", enum: ["present", "missing", "unreadable"] },
       value: { type: valueType, nullable: true },
@@ -149,44 +158,8 @@ export function buildResponseSchema() {
   };
 
   // Optional extras are described to the model but not required, so a plain invoice does not have to carry them.
-  for (const k of OPTIONAL_AMOUNT_FIELDS) props[k] = fieldSchema("NUMBER");
+  for (const k of OPTIONAL_AMOUNT_FIELDS) props[k] = fieldSchema("NUMBER", (BOTTOM_LINE_DESCRIPTIONS as Record<string, string>)[k]);
   for (const k of OPTIONAL_TEXT_FIELDS) props[k] = fieldSchema("STRING");
-  for (const k of EXTRA_TEXT_FIELDS) props[k] = fieldSchema("STRING");
   const keys = ["document_type", ...HEADER_TEXT_FIELDS, ...HEADER_AMOUNT_FIELDS, "line_items"];
-  return { type: "OBJECT", properties: props, required: keys, propertyOrdering: [...keys, ...OPTIONAL_AMOUNT_FIELDS, ...OPTIONAL_TEXT_FIELDS, ...EXTRA_TEXT_FIELDS] };
-}
-
-// ---- Key-figures reading: totals block + e-invoice identifiers + amount in words only (small, fast, blind) ----------------
-
-export function buildKeyFiguresSchema() {
-  const props: Record<string, unknown> = {};
-  for (const k of HEADER_AMOUNT_FIELDS) props[k] = fieldSchema("NUMBER");
-  for (const k of OPTIONAL_AMOUNT_FIELDS) props[k] = fieldSchema("NUMBER");
-  for (const k of OPTIONAL_TEXT_FIELDS) props[k] = fieldSchema("STRING");
-  for (const k of EXTRA_TEXT_FIELDS) props[k] = fieldSchema("STRING");
-  const keys = [...HEADER_AMOUNT_FIELDS];
-  return { type: "OBJECT", properties: props, required: keys, propertyOrdering: [...keys, ...OPTIONAL_AMOUNT_FIELDS, ...OPTIONAL_TEXT_FIELDS, ...EXTRA_TEXT_FIELDS] };
-}
-
-export type KeyFiguresResult = { ok: true; data: KeyFigures } | { ok: false; errors: string[] };
-
-// Strict check of the key-figures JSON. A complete invoice reading is also accepted (its key figures are taken from it),
-// so a provider that ignores the small schema does not break the run.
-export function validateKeyFigures(input: unknown): KeyFiguresResult {
-  if (!isRecord(input)) return { ok: false, errors: ["root: must be an object"] };
-  if ("line_items" in input || "document_type" in input) {
-    const full = validateModelOutput(input);
-    if (!full.ok) return full;
-    const out: Record<string, unknown> = {};
-    for (const k of [...HEADER_AMOUNT_FIELDS, ...OPTIONAL_AMOUNT_FIELDS, ...OPTIONAL_TEXT_FIELDS, ...EXTRA_TEXT_FIELDS]) {
-      if (k in input) out[k] = input[k];
-    }
-    return { ok: true, data: out as KeyFigures };
-  }
-  const errors: string[] = [];
-  checkKeys(input, HEADER_AMOUNT_FIELDS, "root", errors, [...OPTIONAL_AMOUNT_FIELDS, ...OPTIONAL_TEXT_FIELDS, ...EXTRA_TEXT_FIELDS]);
-  for (const key of [...HEADER_AMOUNT_FIELDS, ...OPTIONAL_AMOUNT_FIELDS]) if (key in input) checkField(input[key], "number", key, errors);
-  for (const key of [...OPTIONAL_TEXT_FIELDS, ...EXTRA_TEXT_FIELDS]) if (key in input) checkField(input[key], "string", key, errors);
-  if (errors.length > 0) return { ok: false, errors: errors.slice(0, MAX_ERRORS) };
-  return { ok: true, data: input as unknown as KeyFigures };
+  return { type: "OBJECT", properties: props, required: keys, propertyOrdering: [...keys, ...OPTIONAL_AMOUNT_FIELDS, ...OPTIONAL_TEXT_FIELDS] };
 }
