@@ -100,10 +100,11 @@ test("INR invoices keep the old behaviour", () => {
   assert.ok(!run(model()).flags.some((x) => x.code === "arithmetic_line_mismatch"));
 });
 
-test("totals: taxable + IGST + Cess = grand total, round-off up to INR 1.00 is accepted", () => {
+test("totals: taxable + IGST + Cess = grand total, round-off up to INR 2.00 is accepted", () => {
   assert.deepEqual(arith(run(usd({ grand_total: f(645873) })).flags), []); // 0.50 off
   assert.deepEqual(arith(run(usd({ grand_total: f(645873.5) })).flags), []); // exactly 1.00 off
-  const bad = run(usd({ grand_total: f(645874) })).flags.find((x) => x.code === "arithmetic_total_mismatch");
+  assert.deepEqual(arith(run(usd({ grand_total: f(645874) })).flags), []); // 1.50 off: absorbed as round-off
+  const bad = run(usd({ grand_total: f(645875) })).flags.find((x) => x.code === "arithmetic_total_mismatch"); // 2.50 off
   assert.ok(bad);
   assert.equal(bad.details.expected, 645872.5);
 });

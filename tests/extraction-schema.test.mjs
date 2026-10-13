@@ -61,7 +61,12 @@ test("error messages never echo values", () => {
 test("response schema lists every field as required", () => {
   const s = buildResponseSchema();
   assert.ok(s.required.includes("grand_total") && s.required.includes("line_items"));
-  // exchange_rate is the one optional property (only foreign-currency invoices print a rate)
-  assert.deepEqual(Object.keys(s.properties).filter((k) => !s.required.includes(k)), ["exchange_rate"]);
-  assert.equal(Object.keys(s.properties).length, s.required.length + 1);
+  // Optional extras: only some invoices print them (exchange rate, TCS, TDS, pre-tax charges, round-off, IRN, ack no, e-way bill no)
+  const optional = ["exchange_rate", "tcs_amount", "tds_amount", "pre_tax_charges", "round_off_amount", "irn", "ack_no", "eway_bill_no"];
+  assert.deepEqual(Object.keys(s.properties).filter((k) => !s.required.includes(k)), optional);
+  assert.equal(Object.keys(s.properties).length, s.required.length + optional.length);
+  // per-item optional hints are described to the model but never required
+  const itemProps = Object.keys(s.properties.line_items.items.properties);
+  assert.ok(itemProps.includes("discount_type") && itemProps.includes("applied_tax_type"));
+  assert.ok(!s.properties.line_items.items.required.includes("discount_type"));
 });

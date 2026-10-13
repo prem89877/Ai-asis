@@ -90,10 +90,15 @@ test("arithmetic mismatch flags the total and never edits amounts", () => {
   assert.equal(outcomeFor(r.flags), "needs_review");
 });
 
-test("rounding within tolerance is accepted, beyond it is flagged", () => {
+test("rounding up to INR 2.00 is absorbed as round-off, beyond it is flagged", () => {
   assert.ok(!run(model({ grand_total: f(1180.6) })).codes.includes("arithmetic_total_mismatch"));
-  assert.ok(run(model({ grand_total: f(1181.5) })).codes.includes("arithmetic_total_mismatch"));
-  assert.ok(!run(model({ grand_total: f(1181.5) }), { tolerancePaise: 200 }).codes.includes("arithmetic_total_mismatch"));
+  // INR 1.50 off: inside the INR 2.00 round-off window, so the total PASSES (and an info note records the amount)
+  const r = run(model({ grand_total: f(1181.5) }));
+  assert.ok(!r.codes.includes("arithmetic_total_mismatch"));
+  assert.ok(r.codes.includes("round_off_absorbed"));
+  // INR 2.50 off: a real mismatch
+  assert.ok(run(model({ grand_total: f(1182.5) })).codes.includes("arithmetic_total_mismatch"));
+  assert.ok(!run(model({ grand_total: f(1182.5) }), { tolerancePaise: 300 }).codes.includes("arithmetic_total_mismatch"));
 });
 
 test("total check accepts bill-level discount either way", () => {
@@ -121,8 +126,11 @@ test("line and subtotal mismatches", () => {
   assert.ok(badSub.codes.includes("arithmetic_subtotal_mismatch"));
 });
 
-test("IGST together with CGST/SGST is flagged", () => {
-  assert.ok(run(model({ igst: f(180) })).codes.includes("tax_type_conflict"));
+test("IGST together with CGST/SGST is no longer a blanket warning; it is checked line by line", () => {
+  const r = run(model({ igst: f(180) }));
+  assert.ok(!r.codes.includes("tax_type_conflict"));
+  // no split of the single 180 line tax can give IGST 180 AND CGST/SGST 90 + 90, so it is flagged for what it is
+  assert.ok(r.codes.includes("mixed_tax_unreconciled"));
 });
 
 test("low confidence and unreadable item values are flagged", () => {
