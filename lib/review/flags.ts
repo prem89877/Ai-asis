@@ -2,7 +2,8 @@
 // Extraction-time flags are deliberately not carried over: they described the old values.
 // Flags only point at problems. Values are never changed here.
 import { runChecks } from "../extraction/checks.ts";
-import { checkGstin, gstinChecksumFlagText } from "../extraction/normalize.ts";
+import { suggestGstinFixes, suggestionText } from "../extraction/gstin.ts";
+import { checkGstin, gstinChecksumFlagText, GSTIN_PRINT_ERROR_CONFIDENCE } from "../extraction/normalize.ts";
 import type { FieldMeta, ModelOutput, ReviewFlag, StoredExtracted, StoredItem } from "../extraction/types.ts";
 import { HEADER_FIELDS } from "./fields.ts";
 import type { HeaderValues } from "./fields.ts";
@@ -57,15 +58,19 @@ export function computeReviewFlags(h: HeaderValues, fieldStatus: Record<string, 
     if (g) {
       const c = checkGstin(g);
       if (!c.ok) {
-        // A value a reviewer typed/corrected, or one that two AI readings agreed on, is not called "misread".
-        const source = fieldStatus[key]?.source;
+        // A value a reviewer typed/corrected, or one that two AI readings agreed on with high confidence, is not called "misread".
+        const meta = fieldStatus[key];
+        const suggestions = suggestGstinFixes(g);
+        const extra = { reason: c.reason, ...(suggestions.length ? { suggestions } : {}) };
+        const hint = suggestionText(suggestions);
         if (c.reason === "format") {
-          flags.push({ code: "invalid_gstin", severity: "warning", field: key, message: "This is not a valid GSTIN format. Check the original.", details: { reason: c.reason } });
-        } else if (source === "human") {
-          flags.push({ code: "gstin_checksum_note", severity: "info", field: key, message: "This GSTIN does not pass the standard check-digit test. It was entered or corrected by a reviewer, so it is kept as is.", details: { reason: c.reason, confirmedBy: "human" } });
+          flags.push({ code: "invalid_gstin", severity: "warning", field: key, message: "This is not a valid GSTIN format. Check the original." + hint, details: extra });
+        } else if (meta?.source === "human") {
+          flags.push({ code: "gstin_checksum_note", severity: "info", field: key, message: "GSTIN Checksum Mismatch (Possible Print Error). It was entered or corrected by a reviewer, so it is kept as is." + hint, details: { ...extra, confirmedBy: "human" } });
         } else {
-          const t = gstinChecksumFlagText(source === "recheck");
-          flags.push({ code: t.severity === "info" ? "gstin_checksum_note" : "invalid_gstin", severity: t.severity, field: key, message: t.message, details: { reason: c.reason, ...(source === "recheck" ? { confirmedByRecheck: true } : {}) } });
+          const printError = meta?.source === "recheck" && meta.confidence > GSTIN_PRINT_ERROR_CONFIDENCE;
+          const t = gstinChecksumFlagText(printError);
+          flags.push({ code: printError ? "gstin_checksum_note" : "invalid_gstin", severity: t.severity, field: key, message: t.message + hint, details: { ...extra, ...(printError ? { confirmedByRecheck: true } : {}) } });
         }
       }
     }
