@@ -43,3 +43,6 @@ Plans and prices live in the `plans` table (change them with SQL). Pricing page 
 
 ## Phase 6 Part 2: production readiness
 Release report, deployment guide, pilot checklist and operations notes: `docs/PHASE6_PART2_RELEASE.md`, `docs/DEPLOYMENT.md`, `docs/PILOT_CHECKLIST.md`, `docs/OPERATIONS.md`. Migrations are numbered `001_` to `010_` in `supabase/migrations/`. Run `npm test` for the automated tests and the SQL files in `supabase/tests/` on a scratch database.
+
+## GST validation engine
+Unified GST checks (mixed IGST + CGST/SGST, TCS/TDS, pre-tax charges, round-off, multi-slab, negative lines, e-invoice metadata): `lib/extraction/gst-engine.ts`, migration `011_gst_engine.sql`, notes in `docs/GST_ENGINE.md`.
