@@ -1,4 +1,4 @@
-// POST /api/exports/tally (experimental, off by default): switch, guards, firm scoping, skip reasons. Fakes only.
+// POST /api/exports/tally (experimental, on by default): switch, guards, firm scoping, skip reasons. Fakes only.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { setup, world, req, readJson, uuid, F1, F2 } from "./helpers/route-harness.mjs";
@@ -12,13 +12,13 @@ const inv = (n, firm = F1, over = {}) => ({
 });
 const tables = () => ({ invoice_review_list: [inv(1), inv(2, F1, { status: "needs_review" }), inv(9, F2)] });
 const post = (body, o) => route.POST(req("/api/exports/tally", { body, ...o }));
-const on = (fn) => async () => { process.env.TALLY_EXPORT_ENABLED = "true"; try { await fn(); } finally { delete process.env.TALLY_EXPORT_ENABLED; } };
+const on = (fn) => fn; // the Tally export is on unless TALLY_EXPORT_ENABLED=false
 
-test("tally: the route does not exist (404) unless TALLY_EXPORT_ENABLED=true", async () => {
+test("tally: on by default; the route disappears (404) only when TALLY_EXPORT_ENABLED=false", async () => {
   world({ tables: tables() });
   delete process.env.TALLY_EXPORT_ENABLED;
-  assert.equal((await post({ format: "xml", invoiceIds: [uuid(1)] })).status, 404);
-  process.env.TALLY_EXPORT_ENABLED = "yes";
+  assert.equal((await post({ format: "xml", invoiceIds: [uuid(1)] })).status, 200);
+  process.env.TALLY_EXPORT_ENABLED = "false";
   try { assert.equal((await post({ format: "xml", invoiceIds: [uuid(1)] })).status, 404); } finally { delete process.env.TALLY_EXPORT_ENABLED; }
 });
 
