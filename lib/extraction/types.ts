@@ -93,6 +93,17 @@ export type ModelOutput = {
 export type KeyFigures = { [K in HeaderAmountField]?: ModelField<number> } & { [K in OptionalAmountField]?: ModelField<number> } & {
   [K in OptionalTextField | "amount_in_words"]?: ModelField<string>;
 };
+// Output of the blind "parties" reading: only who is who on the document (supplier / buyer name, GSTIN, PAN, state) plus EVERY
+// GSTIN printed anywhere on it with the role the reader saw next to it. Every key may be absent (the reading abstains on it).
+export const PARTY_TEXT_FIELDS = ["supplier_name", "supplier_gstin", "supplier_pan", "supplier_state", "buyer_name", "buyer_gstin", "buyer_pan", "place_of_supply"] as const;
+export const PRINTED_GSTIN_ROLES = ["supplier", "buyer", "consignee", "other", "unknown"] as const;
+export type PrintedGstinRole = (typeof PRINTED_GSTIN_ROLES)[number];
+export interface PrintedGstin {
+  value: string;
+  role: PrintedGstinRole;
+  label: string; // the words printed next to it ("GSTIN/UIN:", "Bill to", "Ship to", ...)
+}
+export type PartiesReading = { [K in (typeof PARTY_TEXT_FIELDS)[number]]?: ModelField<string> } & { printed_gstins?: PrintedGstin[] };
 // ---- Stored (normalized) shapes -------------------------------------------------------------
 
 // value = readable value, zero = genuine zero, missing / unreadable as reported by the model,

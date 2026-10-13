@@ -24,6 +24,8 @@ export interface GeminiConfig {
   verify: boolean; // second AI reading of every invoice, compared with the first (EXTRACTION_VERIFY=off to disable)
   audit?: boolean; // third, blind row-by-row audit reading; the three readings are voted field by field (EXTRACTION_AUDIT=off to disable)
   totalCheck?: boolean; // blind key-figures reading (totals block, e-invoice identifiers, amount in words) (EXTRACTION_TOTAL_CHECK=off to disable)
+  partiesCheck?: boolean; // blind parties reading (supplier / buyer name, GSTIN, PAN, state, every printed GSTIN) (EXTRACTION_PARTIES_CHECK=off to disable)
+  partiesRetries?: number; // extra parties readings when a GSTIN is still not verified after the vote (EXTRACTION_PARTIES_RETRIES, 0 to 3, default 1)
 }
 
 export interface CheckConfig {
@@ -85,6 +87,8 @@ export function getGeminiConfig(env: Env = process.env): GeminiConfig | null {
     verify: switchedOn(env.EXTRACTION_VERIFY),
     audit: switchedOn(env.EXTRACTION_AUDIT),
     totalCheck: switchedOn(env.EXTRACTION_TOTAL_CHECK),
+    partiesCheck: switchedOn(env.EXTRACTION_PARTIES_CHECK),
+    partiesRetries: int(env, "EXTRACTION_PARTIES_RETRIES", 1, 0, 3),
   };
 }
 

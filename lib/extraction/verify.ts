@@ -12,7 +12,7 @@ import { cleanIdentifier } from "./identifiers.ts";
 import type { IdentifierKind } from "./identifiers.ts";
 import type { CheckOptions } from "./checks.ts";
 import { HEADER_AMOUNT_FIELDS, HEADER_TEXT_FIELDS, ITEM_NUMBER_FIELDS, ITEM_OPTIONAL_TEXT_FIELDS, ITEM_TEXT_FIELDS, OPTIONAL_AMOUNT_FIELDS, OPTIONAL_TEXT_FIELDS } from "./types.ts";
-import type { KeyFigures, ModelField, ModelItem, ModelOutput, ReviewFlag } from "./types.ts";
+import type { KeyFigures, ModelField, ModelItem, ModelOutput, PartiesReading, ReviewFlag } from "./types.ts";
 
 export type Scalar = string | number | null;
 
@@ -74,7 +74,7 @@ function sameText(key: string, a: string, b: string): boolean {
   return cleanText(a).toLowerCase() === cleanText(b).toLowerCase();
 }
 
-function sameField(key: string, a: AnyField, b: AnyField): boolean {
+export function sameField(key: string, a: AnyField, b: AnyField): boolean {
   const pa = present(a);
   const pb = present(b);
   if (!pa && !pb) return true; // neither reading has a value: nothing to compare
@@ -278,7 +278,9 @@ interface Group {
   members: number[]; // indexes into the vote list
 }
 
-export function reconcileMany(readings: ModelOutput[], opts: CheckOptions, keyFigures?: KeyFigures | null): Reconciled {
+// `parties` = the blind parties readings. They vote only on the two GSTINs (names are compared softly in final-audit.ts, because a
+// printed name may legitimately be shortened or extended: "Acme Traders" / "Acme Traders Pvt Ltd").
+export function reconcileMany(readings: ModelOutput[], opts: CheckOptions, keyFigures?: KeyFigures | null, parties?: PartiesReading[] | null): Reconciled {
   const first = readings[0];
   const merged = JSON.parse(JSON.stringify(first)) as ModelOutput;
   const agreed = new Set<string>();
@@ -401,7 +403,9 @@ export function reconcileMany(readings: ModelOutput[], opts: CheckOptions, keyFi
   const noneText: ModelField<string> = { status: "missing", value: null, confidence: 1 };
 
   for (const key of HEADER_TEXT_FIELDS) {
-    vote(key, "text", readings.map((r) => r[key]), mergedAny, null);
+    const fields: (AnyField | undefined)[] = readings.map((r) => r[key]);
+    if (parties && GSTIN_KEYS.has(key)) for (const p of parties) fields.push((p as Record<string, AnyField | undefined>)[key]);
+    vote(key, "text", fields, mergedAny, null);
   }
   for (const key of HEADER_AMOUNT_FIELDS) {
     const fields: (AnyField | undefined)[] = readings.map((r) => r[key]);

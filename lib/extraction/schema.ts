@@ -11,8 +11,10 @@ import {
   ITEM_TEXT_FIELDS,
   OPTIONAL_AMOUNT_FIELDS,
   OPTIONAL_TEXT_FIELDS,
+  PARTY_TEXT_FIELDS,
+  PRINTED_GSTIN_ROLES,
 } from "./types.ts";
-import type { FieldStatus, KeyFigures, ModelOutput } from "./types.ts";
+import type { FieldStatus, KeyFigures, ModelOutput, PartiesReading, PrintedGstin } from "./types.ts";
 
 export const MAX_LINE_ITEMS = 200;
 const MAX_TEXT = 500;
@@ -200,4 +202,69 @@ export function validateKeyFigures(input: unknown): KeyFiguresResult {
   for (const key of [...OPTIONAL_TEXT_FIELDS, ...EXTRA_TEXT_FIELDS]) if (key in input) checkField(input[key], "string", key, errors);
   if (errors.length > 0) return { ok: false, errors: errors.slice(0, MAX_ERRORS) };
   return { ok: true, data: input as unknown as KeyFigures };
+}
+
+// ---- Parties reading: who is the supplier, who is the buyer, and every GSTIN printed on the document (blind, small) --------
+
+const MAX_PRINTED_GSTINS = 20;
+
+export function buildPartiesSchema() {
+  const props: Record<string, unknown> = {};
+  for (const k of PARTY_TEXT_FIELDS) props[k] = fieldSchema("STRING");
+  props.printed_gstins = {
+    type: "ARRAY",
+    description: "EVERY GSTIN / UIN printed anywhere on the document (header, party blocks, footer, e-invoice block), each once, in reading order.",
+    items: {
+      type: "OBJECT",
+      properties: {
+        value: { type: "STRING" },
+        role: { type: "STRING", enum: [...PRINTED_GSTIN_ROLES] },
+        label: { type: "STRING" },
+      },
+      required: ["value", "role", "label"],
+      propertyOrdering: ["value", "role", "label"],
+    },
+  };
+  const keys = ["supplier_gstin", "buyer_gstin", "printed_gstins"];
+  return { type: "OBJECT", properties: props, required: keys, propertyOrdering: [...PARTY_TEXT_FIELDS, "printed_gstins"] };
+}
+
+export type PartiesResult = { ok: true; data: PartiesReading } | { ok: false; errors: string[] };
+
+// Strict check of the parties JSON. A complete invoice reading is also accepted (the party fields are taken from it), so a
+// provider that ignores the small schema does not break the run.
+export function validateParties(input: unknown): PartiesResult {
+  if (!isRecord(input)) return { ok: false, errors: ["root: must be an object"] };
+  if ("line_items" in input || "document_type" in input) {
+    const full = validateModelOutput(input);
+    if (!full.ok) return full;
+    const out: Record<string, unknown> = {};
+    for (const k of ["supplier_name", "supplier_gstin", "buyer_name", "buyer_gstin", "place_of_supply"]) if (k in input) out[k] = input[k];
+    return { ok: true, data: out as PartiesReading };
+  }
+  const errors: string[] = [];
+  checkKeys(input, ["supplier_gstin", "buyer_gstin"], "root", errors, [...PARTY_TEXT_FIELDS, "printed_gstins"]);
+  for (const key of PARTY_TEXT_FIELDS) if (key in input) checkField(input[key], "string", key, errors);
+  const list = input.printed_gstins;
+  const printed: PrintedGstin[] = [];
+  if (list !== undefined) {
+    if (!Array.isArray(list)) errors.push("root.printed_gstins: must be an array");
+    else if (list.length > MAX_PRINTED_GSTINS) errors.push(`root.printed_gstins: more than ${MAX_PRINTED_GSTINS} entries`);
+    else {
+      list.forEach((e, i) => {
+        const path = `printed_gstins[${i}]`;
+        if (!isRecord(e)) return void errors.push(`${path}: must be an object`);
+        checkKeys(e, ["value", "role", "label"], path, errors);
+        if (typeof e.value !== "string" || e.value.trim() === "" || e.value.length > 60) errors.push(`${path}.value: must be a short non-empty string`);
+        if (typeof e.role !== "string" || !(PRINTED_GSTIN_ROLES as readonly string[]).includes(e.role)) errors.push(`${path}.role: not an allowed value`);
+        if (typeof e.label !== "string" || e.label.length > 200) errors.push(`${path}.label: must be a short string`);
+        if (typeof e.value === "string" && typeof e.role === "string" && typeof e.label === "string") printed.push({ value: e.value, role: e.role as PrintedGstin["role"], label: e.label });
+      });
+    }
+  }
+  if (errors.length > 0) return { ok: false, errors: errors.slice(0, MAX_ERRORS) };
+  const data: Record<string, unknown> = {};
+  for (const key of PARTY_TEXT_FIELDS) if (key in input) data[key] = input[key];
+  data.printed_gstins = printed;
+  return { ok: true, data: data as PartiesReading };
 }

@@ -11,13 +11,16 @@ import { getCheckConfig } from "./config.ts";
 import type { CheckConfig, GeminiConfig } from "./config.ts";
 import { nameKey, normalizeExtraction } from "./normalize.ts";
 import { preflight } from "./preflight.ts";
-import { AUDIT_SYSTEM_PROMPT, AUDIT_USER_PROMPT, buildVerifyUserPrompt, KEYFIGURES_SYSTEM_PROMPT, KEYFIGURES_USER_PROMPT, VERIFY_SYSTEM_PROMPT } from "./prompt.ts";
-import { buildKeyFiguresSchema, validateKeyFigures, validateModelOutput } from "./schema.ts";
+import { AUDIT_SYSTEM_PROMPT, AUDIT_USER_PROMPT, buildVerifyUserPrompt, KEYFIGURES_SYSTEM_PROMPT, KEYFIGURES_USER_PROMPT, PARTIES_SYSTEM_PROMPT, PARTIES_USER_PROMPT, VERIFY_SYSTEM_PROMPT } from "./prompt.ts";
+import { buildKeyFiguresSchema, buildPartiesSchema, validateKeyFigures, validateModelOutput, validateParties } from "./schema.ts";
+import { auditExtraction, needsAnotherPartiesReading } from "./final-audit.ts";
+import { resolveParties } from "./party-check.ts";
+import type { GstinVerdict } from "./party-check.ts";
 import { resolveGrandTotal } from "./total-check.ts";
 import type { GrandTotalVerdict, ReadingTotal } from "./total-check.ts";
 import { reconcile, reconcileMany, recheckFlags } from "./verify.ts";
 import type { Reconciled } from "./verify.ts";
-import type { JobOutcome, KeyFigures, ModelOutput, ReviewFlag, StoredExtracted, StoredItem } from "./types.ts";
+import type { JobOutcome, KeyFigures, ModelOutput, PartiesReading, ReviewFlag, StoredExtracted, StoredItem } from "./types.ts";
 
 export interface UsageRecordInput {
   firmId: string;
@@ -156,6 +159,16 @@ function totalSummary(v: GrandTotalVerdict | null, layers: number): Record<strin
   };
 }
 
+// Short, storable form of a GSTIN verdict (validation_summary.verification.gstin).
+function gstinSummary(v: GstinVerdict): Record<string, unknown> {
+  return { status: v.status, vote: v.vote, witnesses: v.witnesses, readings: v.readings, agreeing: v.agreeing, evidence: v.evidence, problems: v.problems, read_as: v.distinct.length > 1 ? v.distinct : undefined };
+}
+
+// Every full reading in order: first, then the second and audit readings that were usable.
+function readingsForParties(first: ModelOutput, extra: { data: ModelOutput }[]): ModelOutput[] {
+  return [first, ...extra.map((x) => x.data)];
+}
+
 export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promise<RunResult> {
   const cfg = deps.geminiConfig;
   const checkCfg = deps.checkConfig ?? getCheckConfig({});
@@ -269,10 +282,13 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
     const wantSecond = cfg.verify;
     const wantAudit = !!cfg.audit;
     const wantKey = !!cfg.totalCheck;
+    const wantParties = !!cfg.partiesCheck;
     const extraFull: { name: "second" | "audit"; data: ModelOutput }[] = [];
     let keyFigures: KeyFigures | null = null;
+    const parties: PartiesReading[] = [];
+    let verdicts: { supplier_gstin: GstinVerdict; buyer_gstin: GstinVerdict } | null = null;
 
-    if (wantSecond || wantAudit || wantKey) {
+    if (wantSecond || wantAudit || wantKey || wantParties) {
       const remaining = cfg.deadlineMs - (now() - started);
       if (remaining < MIN_TIME_FOR_VERIFY_MS) {
         recheckNotes.push({ code: "recheck_unavailable", severity: "info", message: "The second check was skipped because time ran out. Only one reading of the document was used." });
@@ -285,11 +301,34 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
             return null;
           }
         };
-        const [secondRes, auditRes, keyRes] = await Promise.all([
+        const [secondRes, auditRes, keyRes, partiesRes] = await Promise.all([
           wantSecond ? call({ systemPrompt: VERIFY_SYSTEM_PROMPT, userPrompt: buildVerifyUserPrompt(firstReading) }) : Promise.resolve(undefined),
           wantAudit ? call({ systemPrompt: AUDIT_SYSTEM_PROMPT, userPrompt: AUDIT_USER_PROMPT }) : Promise.resolve(undefined),
           wantKey ? call({ systemPrompt: KEYFIGURES_SYSTEM_PROMPT, userPrompt: KEYFIGURES_USER_PROMPT, responseSchema: buildKeyFiguresSchema() }) : Promise.resolve(undefined),
+          wantParties ? call({ systemPrompt: PARTIES_SYSTEM_PROMPT, userPrompt: PARTIES_USER_PROMPT, responseSchema: buildPartiesSchema() }) : Promise.resolve(undefined),
         ]);
+
+        // One blind parties reading (supplier / buyer, GSTIN, PAN, state, every printed GSTIN): parse, record usage, keep it if usable.
+        const takeParties = async (res: GeminiCallResult | null | undefined, usageLabel: string): Promise<boolean> => {
+          if (res === undefined) return false;
+          if (res === null) {
+            log("extraction_parties_error", { jobId: ctx.jobId });
+            return false;
+          }
+          const parsed = res.ok ? parseModelJson(res.text) : null;
+          const checked = parsed && parsed.ok ? validateParties(parsed.value) : null;
+          if (res.ok && checked && checked.ok) {
+            await recordUsage(res, `${usageLabel}_ok`);
+            parties.push(checked.data);
+            return true;
+          }
+          await recordUsage(res, res.ok ? `${usageLabel}_invalid_output` : `${usageLabel}_${res.code}`);
+          log("extraction_parties_unavailable", { jobId: ctx.jobId, code: res.ok ? "invalid_model_output" : res.code });
+          return false;
+        };
+        if (partiesRes !== undefined && !(await takeParties(partiesRes, "parties"))) {
+          recheckNotes.push({ code: "parties_unavailable", severity: "info", message: "The supplier / buyer reading (GSTIN, PAN, state) could not run, so one witness fewer was used for the GSTINs." });
+        }
 
         // One full reading (second or audit): parse, record usage, keep it if it is a usable invoice reading.
         const takeFull = async (name: "second" | "audit", res: GeminiCallResult | null | undefined) => {
@@ -345,16 +384,39 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
 
         // Vote / compare the readings.
         const readings: ModelOutput[] = [firstReading, ...extraFull.map((x) => x.data)];
-        layerCount = readings.length + (keyFigures ? 1 : 0);
+        layerCount = readings.length + (keyFigures ? 1 : 0) + parties.length;
         let rec: Reconciled | null = null;
-        if (readings.length >= 3 || keyFigures) rec = reconcileMany(readings, checkCfg, keyFigures);
+        if (readings.length >= 3 || keyFigures || parties.length > 0) rec = reconcileMany(readings, checkCfg, keyFigures, parties);
         else if (readings.length === 2) rec = reconcile(readings[0], readings[1], checkCfg);
         if (rec) {
           model = rec.merged;
           agreed = rec.agreed;
           recheckNotes.push(...recheckFlags(rec));
         }
+
+        // Extra blind parties readings while a GSTIN is still not verified (EXTRACTION_PARTIES_RETRIES). Each one is a new,
+        // independent witness; the vote and the evidence are recomputed from scratch after every reading.
+        let pr = resolveParties(readingsForParties(firstReading, extraFull), parties, model);
+        let retries = wantParties ? cfg.partiesRetries ?? 1 : 0;
+        while (retries > 0 && parties.length > 0 && needsAnotherPartiesReading(pr.verdicts)) {
+          const left = cfg.deadlineMs - (now() - started);
+          if (left < MIN_TIME_FOR_CALL_MS + VERIFY_SAVE_MARGIN_MS) break;
+          retries -= 1;
+          const before = parties.length;
+          const res = await deps.gemini({ apiKey: cfg.apiKey, model: cfg.model, mime: ctx.mime, data: bytes, timeoutMs: Math.max(1_000, Math.min(cfg.timeoutMs, left - VERIFY_SAVE_MARGIN_MS)), maxOutputTokens: cfg.maxOutputTokens, fetchImpl: deps.fetchImpl, systemPrompt: PARTIES_SYSTEM_PROMPT, userPrompt: PARTIES_USER_PROMPT, responseSchema: buildPartiesSchema() }).catch(() => null);
+          if (!(await takeParties(res, "parties_retry")) || parties.length === before) break;
+          layerCount += 1;
+          pr = resolveParties(readingsForParties(firstReading, extraFull), parties, model);
+        }
+        model = pr.merged;
+        verdicts = pr.verdicts;
+        recheckNotes.push(...pr.flags);
       }
+    }
+    if (!verdicts) {
+      // Extra layers did not run (switched off or no time): the GSTINs are still judged by their format, check digit and state code.
+      const pr = resolveParties([firstReading], [], model);
+      verdicts = pr.verdicts;
     }
 
     // ---- Grand total: every reading, the printed amount in words and the invoice arithmetic are witnesses (total-check.ts). ----
@@ -384,6 +446,22 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
     if (gstVerdict.patch.round_off_amount !== undefined) {
       extracted.round_off_amount = Math.round(gstVerdict.patch.round_off_amount * 100) / 100;
       extracted.field_status.round_off_amount = { state: "value", confidence: 1, source: "computed" };
+    }
+
+    // Final verification gate: three layers (rules, consensus of every reading, independent evidence) over the whole content.
+    {
+      const audit = auditExtraction({
+        extracted, items, merged: model, readings: readingsForParties(firstReading, extraFull), parties, verdicts,
+        totalStatus: verdict && verdict.status !== "no_value" ? verdict.status : null, flags, now: new Date(now()),
+      });
+      flags.push(...audit.flags);
+      extracted.validation_summary = {
+        ...(extracted.validation_summary ?? {}),
+        verification: {
+          ...audit.report,
+          gstin: verdicts ? { supplier_gstin: gstinSummary(verdicts.supplier_gstin), buyer_gstin: gstinSummary(verdicts.buyer_gstin) } : undefined,
+        },
+      };
     }
 
     try {
