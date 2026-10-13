@@ -18,7 +18,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const HEADER_SELECT =
-  "vendor_name, buyer_name, vendor_gstin, buyer_gstin, invoice_number, invoice_date, place_of_supply, currency, document_type, taxable_amount, discount_amount, cgst_amount, sgst_amount, igst_amount, cess_amount, total_amount, field_status, corrected_fields, updated_at";
+  "vendor_name, buyer_name, vendor_gstin, buyer_gstin, invoice_number, invoice_date, place_of_supply, currency, document_type, taxable_amount, discount_amount, cgst_amount, sgst_amount, igst_amount, cess_amount, total_amount, exchange_rate, tcs_amount, tds_amount, pre_tax_charges, round_off_amount, irn, ack_no, eway_bill_no, field_status, corrected_fields, updated_at";
 
 function numOrNull(v: unknown): number | null {
   return v === null || v === undefined ? null : Number(v);
@@ -57,7 +57,7 @@ export async function PUT(request: Request, { params }: { params: { id: string }
     admin.from("extracted_data").select(HEADER_SELECT).eq("invoice_id", params.id).eq("firm_id", firmId).maybeSingle(),
     admin
       .from("line_items")
-      .select("position, description, hsn_code, quantity, unit, unit_price, discount_amount, taxable_amount, gst_rate, gst_amount, line_total, field_status")
+      .select("position, description, hsn_code, quantity, unit, unit_price, discount_amount, discount_type, applied_tax_type, taxable_amount, gst_rate, gst_amount, line_total, field_status")
       .eq("invoice_id", params.id)
       .eq("firm_id", firmId)
       .order("position", { ascending: true }),
@@ -78,6 +78,23 @@ export async function PUT(request: Request, { params }: { params: { id: string }
       ? numOrNull(v)
       : ((v as string | null) ?? null);
   }
+  // Values the review screen does not edit but the GST checks need. Taken from the saved record, never from the browser.
+  const extras = {
+    exchange_rate: numOrNull(row.exchange_rate),
+    tcs_amount: numOrNull(row.tcs_amount),
+    tds_amount: numOrNull(row.tds_amount),
+    pre_tax_charges: numOrNull(row.pre_tax_charges),
+    round_off_amount: numOrNull(row.round_off_amount),
+    irn: (row.irn as string | null) ?? null,
+    ack_no: (row.ack_no as string | null) ?? null,
+    eway_bill_no: (row.eway_bill_no as string | null) ?? null,
+  };
+  // Per-line labels (discount type, IGST vs CGST/SGST) are not editable here. They stay with their line while the
+  // number of lines is unchanged; if lines were added or removed the labels cannot be matched and are dropped.
+  const itemLabels = ((itemsRes.data ?? []) as Record<string, unknown>[]).map((r) => ({
+    discount_type: (r.discount_type as StoredItem["discount_type"]) ?? null,
+    applied_tax_type: (r.applied_tax_type as StoredItem["applied_tax_type"]) ?? null,
+  }));
   const currentItems: StoredItemRow[] = ((itemsRes.data ?? []) as Record<string, unknown>[]).map((r) => {
     const out = { field_status: (r.field_status ?? {}) as Record<string, FieldMeta> } as StoredItemRow;
     for (const f of ITEM_FIELDS) out[f.key] = f.kind === "amount" ? numOrNull(r[f.key]) : ((r[f.key] as string | null) ?? null);
@@ -95,7 +112,10 @@ export async function PUT(request: Request, { params }: { params: { id: string }
   const applied = applyReview(current, input, g.user.id, nowIso);
   const finalItems = applied.items ?? currentItems;
 
-  const storedItems: StoredItem[] = finalItems.map((it) => ({
+  const keepLabels = applied.items === null || applied.items.length === itemLabels.length;
+  const labelFor = (idx: number) => (keepLabels ? itemLabels[idx] ?? { discount_type: null, applied_tax_type: null } : { discount_type: null, applied_tax_type: null });
+  const storedItems: StoredItem[] = finalItems.map((it, idx) => ({
+    ...labelFor(idx),
     description: it.description as string | null,
     hsn_code: it.hsn_code as string | null,
     quantity: it.quantity as number | null,
@@ -110,11 +130,11 @@ export async function PUT(request: Request, { params }: { params: { id: string }
   }));
 
   const cfg = getCheckConfig();
-  const flags: ReviewFlag[] = computeReviewFlags(applied.header, applied.fieldStatus, storedItems, cfg);
+  const flags: ReviewFlag[] = computeReviewFlags(applied.header, applied.fieldStatus, storedItems, cfg, new Date(), extras);
 
   // Duplicate candidates are re-checked against the corrected values.
   try {
-    const stored = toStoredExtracted(applied.header, applied.fieldStatus);
+    const stored = toStoredExtracted(applied.header, applied.fieldStatus, extras);
     const candidates = await createSupabaseStore(admin).findDuplicateCandidates({
       firmId,
       invoiceId: params.id,
@@ -145,7 +165,7 @@ export async function PUT(request: Request, { params }: { params: { id: string }
     p_header: headerPayload,
     p_field_status: applied.fieldStatus,
     p_corrected: applied.corrected,
-    p_items: applied.items ? applied.items.map((it) => ({ ...it })) : null,
+    p_items: applied.items ? applied.items.map((it, idx) => ({ ...it, ...labelFor(idx) })) : null,
     p_flags: flags,
     p_new_status: hasOpenFlags(flags) ? "needs_review" : "completed",
     p_changes: applied.changes,
