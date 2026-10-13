@@ -22,6 +22,6 @@ export async function GET(request: Request) {
     connections: conns.data ?? [],
     recent: recent.data ?? [],
     canManage: g.membership.role === "owner" || g.membership.role === "admin",
-    available: { google_sheets: !!cfg.google && isEncryptionConfigured(), microsoft_excel: !!cfg.microsoft && isEncryptionConfigured(), tally: process.env.TALLY_EXPORT_ENABLED === "true" },
+    available: { google_sheets: !!cfg.google && isEncryptionConfigured(), microsoft_excel: !!cfg.microsoft && isEncryptionConfigured(), tally: process.env.TALLY_EXPORT_ENABLED !== "false" },
   });
 }
