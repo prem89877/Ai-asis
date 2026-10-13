@@ -13,11 +13,11 @@ export const maxDuration = 30;
 const MAX_INVOICES = 500;
 const FORMATS = { xml: { ext: "xml", type: "application/xml; charset=utf-8" }, json: { ext: "json", type: "application/json; charset=utf-8" }, csv: { ext: "csv", type: "text/csv; charset=utf-8" } } as const;
 
-// EXPERIMENTAL Tally-compatible purchase-voucher file. OFF unless TALLY_EXPORT_ENABLED=true. It only builds a file: nothing is sent
+// EXPERIMENTAL Tally-compatible purchase-voucher file, used by the Export dialog ("Tally" layout). ON by default; turn it off with TALLY_EXPORT_ENABLED=false. It only builds a file: nothing is sent
 // to Tally and nothing is posted. Only VERIFIED invoices of the signed-in user's own firm are read (explicit firm_id filter on
 // top of Row Level Security). NOT recorded in export history yet (see docs/PHASE6_PART2_RELEASE.md).
 export async function POST(request: Request) {
-  if (process.env.TALLY_EXPORT_ENABLED !== "true") return json({ error: "Not found." }, 404);
+  if (process.env.TALLY_EXPORT_ENABLED === "false") return json({ error: "Not found." }, 404); // on by default; set TALLY_EXPORT_ENABLED=false to turn it off
   const g = await guard(request, { mutating: true });
   if (!g.ok) return g.response;
   const { firmId } = g.membership;
