@@ -21,6 +21,7 @@ export interface GeminiConfig {
   deadlineMs: number; // total budget for one run; keep below the route's maxDuration
   maxAttempts: number; // provider calls per run
   maxOutputTokens: number;
+  verify: boolean; // second AI reading of every invoice, compared with the first (EXTRACTION_VERIFY=off to disable)
 }
 
 export interface CheckConfig {
@@ -74,6 +75,7 @@ export function getGeminiConfig(env: Env = process.env): GeminiConfig | null {
     deadlineMs: int(env, "EXTRACTION_DEADLINE_MS", 52_000, 10_000, 280_000),
     maxAttempts: int(env, "EXTRACTION_MAX_ATTEMPTS", 3, 1, 5),
     maxOutputTokens: int(env, "GEMINI_MAX_OUTPUT_TOKENS", 32_768, 1_024, 65_536),
+    verify: !["off", "false", "0", "no"].includes((env.EXTRACTION_VERIFY ?? "").trim().toLowerCase()),
   };
 }
 

@@ -18,6 +18,9 @@ export interface GeminiCallInput {
   timeoutMs: number;
   maxOutputTokens: number;
   fetchImpl?: typeof fetch;
+  // Optional prompt overrides. Used by the second-check pass; the first pass uses the defaults.
+  systemPrompt?: string;
+  userPrompt?: string;
 }
 
 export type GeminiCallResult =
@@ -60,12 +63,12 @@ export const callGemini: GeminiCaller = async (input) => {
   const timer = setTimeout(() => controller.abort(), input.timeoutMs);
 
   const body = {
-    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    systemInstruction: { parts: [{ text: input.systemPrompt ?? SYSTEM_PROMPT }] },
     contents: [
       {
         role: "user",
         parts: [
-          { text: USER_PROMPT },
+          { text: input.userPrompt ?? USER_PROMPT },
           { inlineData: { mimeType: input.mime, data: Buffer.from(input.data).toString("base64") } },
         ],
       },

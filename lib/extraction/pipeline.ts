@@ -10,7 +10,9 @@ import { getCheckConfig } from "./config.ts";
 import type { CheckConfig, GeminiConfig } from "./config.ts";
 import { nameKey, normalizeExtraction } from "./normalize.ts";
 import { preflight } from "./preflight.ts";
+import { buildVerifyUserPrompt, VERIFY_SYSTEM_PROMPT } from "./prompt.ts";
 import { validateModelOutput } from "./schema.ts";
+import { reconcile, recheckFlags } from "./verify.ts";
 import type { JobOutcome, ModelOutput, ReviewFlag, StoredExtracted, StoredItem } from "./types.ts";
 
 export interface UsageRecordInput {
@@ -97,6 +99,9 @@ export interface RunResult {
 
 const MIN_TIME_FOR_CALL_MS = 5_000;
 const MIN_TIME_FOR_RETRY_MS = 8_000;
+// The second check only starts if this much of the run budget is left, and always leaves a margin for saving.
+const MIN_TIME_FOR_VERIFY_MS = 12_000;
+const VERIFY_SAVE_MARGIN_MS = 4_000;
 
 function stripFence(text: string): string {
   const t = text.trim();
@@ -230,8 +235,53 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
     if (!model) return await fail(lastCode);
     if (model.document_type === "not_an_invoice") return await fail("not_an_invoice");
 
-    const { extracted, items } = normalizeExtraction(model, { model: cfg.model, now: new Date(now()) });
-    const flags: ReviewFlag[] = [...extracted.review_flags, ...runChecks(extracted, items, checkCfg)];
+    // ---- Second layer: the model reads the same document again, the two readings are compared in code. ----
+    // If this step fails for any reason the first reading is used as it is and a note is added.
+    const recheckNotes: ReviewFlag[] = [];
+    let agreed: ReadonlySet<string> | undefined;
+    if (cfg.verify) {
+      const remaining = cfg.deadlineMs - (now() - started);
+      if (remaining < MIN_TIME_FOR_VERIFY_MS) {
+        recheckNotes.push({ code: "recheck_unavailable", severity: "info", message: "The second check was skipped because time ran out. Only one reading of the document was used." });
+      } else {
+        try {
+          const res = await deps.gemini({
+            apiKey: cfg.apiKey,
+            model: cfg.model,
+            mime: ctx.mime,
+            data: bytes,
+            timeoutMs: Math.max(1_000, Math.min(cfg.timeoutMs, remaining - VERIFY_SAVE_MARGIN_MS)),
+            maxOutputTokens: cfg.maxOutputTokens,
+            fetchImpl: deps.fetchImpl,
+            systemPrompt: VERIFY_SYSTEM_PROMPT,
+            userPrompt: buildVerifyUserPrompt(model),
+          });
+          const parsed = res.ok ? parseModelJson(res.text) : null;
+          const second = parsed && parsed.ok ? validateModelOutput(parsed.value) : null;
+          if (res.ok && second && second.ok) {
+            await recordUsage(res, "verify_ok");
+            if (second.data.document_type === "not_an_invoice") {
+              recheckNotes.push({ code: "recheck_mismatch", severity: "warning", field: "document_type", message: "The second check thought this file is not an invoice. Check the original.", details: { first: model.document_type, second: "not_an_invoice" } });
+            } else {
+              const rec = reconcile(model, second.data, checkCfg);
+              model = rec.merged;
+              agreed = rec.agreed;
+              recheckNotes.push(...recheckFlags(rec));
+            }
+          } else {
+            await recordUsage(res, res.ok ? "verify_invalid_output" : `verify_${res.code}`);
+            log("extraction_recheck_unavailable", { jobId: ctx.jobId, code: res.ok ? "invalid_model_output" : res.code });
+            recheckNotes.push({ code: "recheck_unavailable", severity: "info", message: "The second check could not run. Only one reading of the document was used." });
+          }
+        } catch {
+          log("extraction_recheck_error", { jobId: ctx.jobId });
+          recheckNotes.push({ code: "recheck_unavailable", severity: "info", message: "The second check could not run. Only one reading of the document was used." });
+        }
+      }
+    }
+
+    const { extracted, items } = normalizeExtraction(model, { model: cfg.model, now: new Date(now()), agreed });
+    const flags: ReviewFlag[] = [...extracted.review_flags, ...runChecks(extracted, items, checkCfg), ...recheckNotes];
 
     try {
       const candidates = await deps.store.findDuplicateCandidates({

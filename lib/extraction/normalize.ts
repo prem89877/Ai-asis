@@ -137,6 +137,21 @@ function readAmount(
 export interface NormalizeOptions {
   model: string;
   now?: Date;
+  // Header fields (model names, e.g. "supplier_gstin") where two separate readings of the document gave
+  // the same value. Such a value is stored with source "recheck".
+  agreed?: ReadonlySet<string>;
+}
+
+// Wording for a GSTIN whose check digit fails. "A character may have been misread" is only said when a
+// misreading is actually possible; if two separate readings agree on all 15 characters the number is
+// most likely printed that way on the invoice itself, so it is shown as information, not as a warning.
+export function gstinChecksumFlagText(confirmedByRecheck: boolean): { severity: "info" | "warning"; message: string } {
+  return confirmedByRecheck
+    ? {
+        severity: "info",
+        message: "This GSTIN does not pass the standard check-digit test, but two readings of the document gave the same 15 characters, so it is most likely printed this way on the invoice.",
+      }
+    : { severity: "warning", message: "The GSTIN check digit does not match. A character may have been misread. Check the original." };
 }
 
 export interface NormalizeResult {
@@ -153,6 +168,14 @@ export function normalizeExtraction(model: ModelOutput, opts: NormalizeOptions):
   const amt: Record<string, number | null> = {};
   for (const key of HEADER_AMOUNT_FIELDS) amt[key] = readAmount(c, key, model[key], { dp: 2, max: MAX_ABS_AMOUNT });
 
+  // Values that two separate readings agreed on are remembered, so later edits do not re-raise doubts about them.
+  if (opts.agreed) {
+    for (const key of opts.agreed) {
+      const m = c.status[key];
+      if (m && (m.state === "value" || m.state === "zero")) m.source = "recheck";
+    }
+  }
+
   // GSTINs: keep what was read (upper-case, no spaces); flag anything that is not a valid GSTIN.
   for (const key of ["supplier_gstin", "buyer_gstin"] as const) {
     const raw = text[key];
@@ -161,13 +184,10 @@ export function normalizeExtraction(model: ModelOutput, opts: NormalizeOptions):
     text[key] = g;
     const check = checkGstin(g);
     if (!check.ok) {
-      c.flags.push({
-        code: "invalid_gstin",
-        severity: "warning",
-        field: key,
-        message: check.reason === "format" ? "This is not a valid GSTIN format. Check the original." : "The GSTIN check digit does not match. A character may have been misread.",
-        details: { reason: check.reason },
-      });
+      const confirmed = check.reason === "checksum" && (opts.agreed?.has(key) ?? false);
+      const text = check.reason === "format" ? { severity: "warning" as const, message: "This is not a valid GSTIN format. Check the original." } : gstinChecksumFlagText(confirmed);
+      // An info-level note gets its own code, so the "GSTIN invalid" chip and filter (built from the code) stay quiet for it.
+      c.flags.push({ code: text.severity === "info" ? "gstin_checksum_note" : "invalid_gstin", severity: text.severity, field: key, message: text.message, details: { reason: check.reason, ...(confirmed ? { confirmedByRecheck: true } : {}) } });
     }
   }
 

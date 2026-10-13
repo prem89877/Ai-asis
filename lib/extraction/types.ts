@@ -74,6 +74,9 @@ export type FieldState = "value" | "zero" | "missing" | "unreadable" | "invalid"
 export interface FieldMeta {
   state: FieldState;
   confidence: number;
+  // Where the value was confirmed: "recheck" = two separate AI readings of the document gave the same
+  // value; "human" = a reviewer typed or corrected it. Optional, so older records stay valid.
+  source?: "recheck" | "human";
 }
 
 export type FlagSeverity = "error" | "warning" | "info";
