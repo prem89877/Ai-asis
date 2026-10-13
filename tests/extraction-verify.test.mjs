@@ -89,8 +89,8 @@ test("the first reading is kept when only it passes the GSTIN check, with no fla
   assert.equal(relevant(saved(calls)).length, 0);
 });
 
-test("GSTIN that fails the check digit but both readings agree: info only, no 'misread' text, still completed", async () => {
-  const same = model({ supplier_gstin: f("27AAPFU0939F1ZW") });
+test("GSTIN that fails the check digit, both readings agree with >95% confidence: info only, no 'misread' text, still completed", async () => {
+  const same = model({ supplier_gstin: f("27AAPFU0939F1ZW", 0.97) });
   const { deps, ctx, calls } = setup([ok(same), ok(same)]);
   const r = await runExtraction(deps, ctx);
   assert.equal(r.outcome, "completed");

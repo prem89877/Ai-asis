@@ -61,5 +61,7 @@ test("error messages never echo values", () => {
 test("response schema lists every field as required", () => {
   const s = buildResponseSchema();
   assert.ok(s.required.includes("grand_total") && s.required.includes("line_items"));
-  assert.equal(Object.keys(s.properties).length, s.required.length);
+  // exchange_rate is the one optional property (only foreign-currency invoices print a rate)
+  assert.deepEqual(Object.keys(s.properties).filter((k) => !s.required.includes(k)), ["exchange_rate"]);
+  assert.equal(Object.keys(s.properties).length, s.required.length + 1);
 });
