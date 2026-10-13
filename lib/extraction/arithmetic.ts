@@ -4,6 +4,9 @@
 // Calculation order used for every line (same as normal accounting practice):
 //   1. gross   = quantity x unit price                       (in the invoice currency)
 //   2. net     = gross - trade discount                      (in the invoice currency)
+//                The discount can be a flat amount OR a percentage (5 can mean 5% or 5 USD). The extractor
+//                does not say which, so every reading is tried (see lineCandidates) and the line passes if
+//                any plausible reading reproduces the printed taxable value.
 //   3. taxable = net x exchange rate                         (INR; rate = 1 for INR invoices)
 //   4. tax     = taxable x GST %                             (checked in lib/review/gst.ts)
 import { toPaise } from "./normalize.ts";
@@ -40,27 +43,75 @@ export interface LineSteps {
   taxable: number;
 }
 
-export function lineSteps(quantity: number, unitPrice: number, discount: number | null, rate = 1): LineSteps {
-  const gross = quantity * unitPrice;
-  const net = gross - nz(discount);
-  return { gross, net, taxable: net * rate };
-}
-
 function median(values: number[]): number {
   const s = [...values].sort((a, b) => a - b);
   const m = Math.floor(s.length / 2);
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
+export type DiscountType = "PERCENT" | "AMOUNT";
+
+// Money maths is done on numbers rounded to 1e-6, so binary float noise (0.1 + 0.2) never decides a result.
+function clean(x: number): number {
+  return Math.round(x * 1e6) / 1e6;
+}
+
+// net = gross - discount. With discountType "PERCENT" the discount is a percentage of gross; otherwise a flat amount.
+export function lineSteps(quantity: number, unitPrice: number, discount: number | null, rate = 1, discountType: DiscountType = "AMOUNT"): LineSteps {
+  const gross = clean(quantity * unitPrice);
+  const d = nz(discount);
+  const net = discountType === "PERCENT" ? clean(gross * (1 - d / 100)) : clean(gross - d);
+  return { gross, net, taxable: clean(net * rate) };
+}
+
+export type Reading = "no_discount" | "flat" | "percent";
+export interface Candidate {
+  reading: Reading;
+  net: number; // in the invoice currency
+}
+
+// Every net value (invoice currency) the line could legitimately have, one per reading of the discount.
+//   - an explicit discountType is trusted: only that reading is used
+//   - no discount, or discount 0: gross
+//   - otherwise: the discount as printed may be a flat amount, a percentage (only when 0 < d <= 100), or ignored
+//     (some invoices print a discount column that is already inside the unit price)
+export function lineCandidates(it: Pick<StoredItem, "quantity" | "unit_price" | "discount_amount"> & { discount_type?: DiscountType | null }): Candidate[] {
+  const q = it.quantity;
+  const p = it.unit_price;
+  if (q === null || p === null) return [];
+  const gross = clean(q * p);
+  const d = it.discount_amount;
+  if (d === null || d === 0) return [{ reading: "no_discount", net: gross }];
+  const out: Candidate[] = [];
+  const type = it.discount_type ?? null;
+  if (type !== "PERCENT") out.push({ reading: "flat", net: clean(gross - d) });
+  if (type === "PERCENT" || (type === null && d > 0 && d <= 100)) out.push({ reading: "percent", net: clean(gross * (1 - d / 100)) });
+  if (type === null) out.push({ reading: "no_discount", net: gross });
+  return out;
+}
+
 // The conversion rate that most lines agree on, found from the lines themselves (taxable / net).
+// Each line offers one candidate rate per discount reading; the rate supported by the most lines wins.
+// If no two lines agree, fall back to the median of the plain (flat discount) ratios.
 function impliedRate(items: StoredItem[]): number | null {
-  const ratios: number[] = [];
+  const perLine: number[][] = [];
+  const plain: number[] = [];
   for (const it of items) {
-    if (it.quantity === null || it.unit_price === null || it.taxable_amount === null) continue;
-    const { net } = lineSteps(it.quantity, it.unit_price, it.discount_amount);
-    if (net > 0 && it.taxable_amount > 0) ratios.push(it.taxable_amount / net);
+    if (it.taxable_amount === null || it.taxable_amount <= 0) continue;
+    const cands = lineCandidates(it).filter((c) => c.net > 0);
+    if (cands.length === 0) continue;
+    perLine.push(cands.map((c) => it.taxable_amount! / c.net));
+    plain.push(it.taxable_amount / cands[0].net);
   }
-  return ratios.length >= 2 ? median(ratios) : null;
+  if (perLine.length < 2) return null;
+  const near = (a: number, b: number) => Math.abs(a - b) <= Math.abs(b) * RATE_REL_TOLERANCE;
+  let best: { support: number; rates: number[] } | null = null;
+  for (const r of perLine.flat()) {
+    const matched = perLine.map((rs) => rs.find((x) => near(x, r))).filter((x): x is number => x !== undefined);
+    if (!best || matched.length > best.support) best = { support: matched.length, rates: matched };
+  }
+  if (best && best.support >= 2) return median(best.rates);
+  return median(plain);
 }
 
 export function checkLineItems(items: StoredItem[], ctx: ArithmeticContext): ReviewFlag[] {
@@ -78,11 +129,12 @@ export function checkLineItems(items: StoredItem[], ctx: ArithmeticContext): Rev
     if (q === null || p === null || t === null) return;
     const actual = toPaise(t);
     const disc = it.discount_amount;
-    const { gross, net } = lineSteps(q, p, disc);
-
-    // Values exactly as printed in one currency: with or without the item discount applied.
-    const plain = [toPaise(net), toPaise(gross)];
+    const cands = lineCandidates(it);
+    const gross = clean(q * p);
     const within = (expectedPaise: number, relTol: number) => Math.abs(actual - expectedPaise) <= tol + Math.round(Math.abs(expectedPaise) * relTol);
+
+    // Values exactly as printed in one currency: every reading of the discount, plus gross.
+    const plain = [...cands.map((c) => toPaise(c.net)), toPaise(gross)];
     if (plain.some((e) => within(e, 0))) return;
 
     let rateUsed: number | null = null;
@@ -92,11 +144,17 @@ export function checkLineItems(items: StoredItem[], ctx: ArithmeticContext): Rev
         unverified = true; // foreign currency, but nothing to convert with
         return;
       }
-      const converted = [toPaise(net * r), toPaise(gross * r), toPaise(gross * r - nz(disc))]; // discount in foreign currency, or already in INR
+      const converted = [
+        ...cands.map((c) => toPaise(c.net * r)), // discount (flat or %) in the invoice currency
+        toPaise(gross * r),
+        toPaise(gross * r - nz(disc)), // flat discount already in INR
+      ];
       if (converted.some((e) => within(e, RATE_REL_TOLERANCE))) return;
       rateUsed = r;
     }
 
+    // Reported "expected" uses the primary reading: the explicit type if known, else flat (the original behaviour).
+    const net = (it.discount_type === "PERCENT" ? cands.find((c) => c.reading === "percent") : cands[0])?.net ?? gross;
     const expected = rateUsed === null ? plain[0] : toPaise(net * rateUsed);
     flags.push({
       code: "arithmetic_line_mismatch",

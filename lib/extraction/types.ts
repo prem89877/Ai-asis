@@ -124,6 +124,7 @@ export interface StoredItem {
   unit: string | null;
   unit_price: number | null;
   discount_amount: number | null;
+  discount_type?: "PERCENT" | "AMOUNT" | null; // optional hint; when absent both readings are tried
   taxable_amount: number | null;
   gst_rate: number | null;
   gst_amount: number | null;
