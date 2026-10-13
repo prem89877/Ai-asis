@@ -1,5 +1,5 @@
 // Review checks. They only ADD flags. They never change an extracted value.
-import { toPaise } from "./normalize.ts";
+import { checkLineItems, checkTotals } from "./arithmetic.ts";
 import type { FieldMeta, ReviewFlag, StoredExtracted, StoredItem } from "./types.ts";
 
 export interface CheckOptions {
@@ -91,63 +91,9 @@ export function runChecks(extracted: StoredExtracted, items: StoredItem[], opts:
     flags.push({ code: "tax_type_conflict", severity: "warning", message: "IGST and CGST/SGST are both present. Check which applies." });
   }
 
-  // 5. Arithmetic. Tolerance covers normal rounding. Missing figures are never treated as zero silently.
-  items.forEach((it, i) => {
-    const q = it.quantity;
-    const p = it.unit_price;
-    const t = it.taxable_amount;
-    if (q !== null && p !== null && t !== null) {
-      const expected = toPaise(q * p) - toPaise(nz(it.discount_amount));
-      const actual = toPaise(t);
-      // Accept the line value with or without the item discount applied.
-      const alt = toPaise(q * p);
-      if (Math.abs(actual - expected) > tol && Math.abs(actual - alt) > tol) {
-        flags.push({
-          code: "arithmetic_line_mismatch",
-          severity: "warning",
-          field: "taxable_value",
-          itemPosition: i + 1,
-          message: "Quantity x unit price does not match the item's taxable value.",
-          details: { expected: expected / 100, extracted: actual / 100 },
-        });
-      }
-    }
-  });
-
-  const header = extracted.taxable_amount;
-  if (header !== null && items.length > 0 && items.every((it) => it.taxable_amount !== null)) {
-    const sum = items.reduce((a, it) => a + toPaise(it.taxable_amount as number), 0);
-    const candidates = [toPaise(header)];
-    if (extracted.discount_amount !== null) candidates.push(toPaise(header) + toPaise(extracted.discount_amount));
-    if (!candidates.some((cnd) => Math.abs(sum - cnd) <= tol)) {
-      flags.push({
-        code: "arithmetic_subtotal_mismatch",
-        severity: "error",
-        field: "taxable_value",
-        message: "The item taxable values do not add up to the invoice taxable value.",
-        details: { itemsSum: sum / 100, extracted: header / 100 },
-      });
-    }
-  }
-
-  const total = extracted.total_amount;
-  if (total !== null && header !== null) {
-    const taxes = [extracted.cgst_amount, extracted.sgst_amount, extracted.igst_amount, extracted.cess_amount];
-    const taxPaise = taxes.reduce<number>((a, v) => a + (v === null ? 0 : toPaise(v)), 0);
-    const base = toPaise(header) + taxPaise;
-    const candidates = [base];
-    if (extracted.discount_amount !== null) candidates.push(base - toPaise(extracted.discount_amount));
-    if (!candidates.some((cnd) => Math.abs(toPaise(total) - cnd) <= tol)) {
-      const absent = (["cgst", "sgst", "igst", "cess"] as const).filter((k) => fs[k]?.state === "missing");
-      flags.push({
-        code: "arithmetic_total_mismatch",
-        severity: "error",
-        field: "grand_total",
-        message: "Taxable value plus taxes does not equal the grand total.",
-        details: { expected: base / 100, extracted: toPaise(total) / 100, taxFieldsNotFound: absent },
-      });
-    }
-  }
+  // 5. Arithmetic: line items (INR or foreign currency) and invoice totals. See arithmetic.ts.
+  const ctx = { currency: extracted.currency, exchangeRate: extracted.exchange_rate, tolerancePaise: tol };
+  flags.push(...checkLineItems(items, ctx), ...checkTotals(extracted, items, ctx));
 
   return flags;
 }

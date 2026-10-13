@@ -62,6 +62,8 @@ export type ModelItem = { [K in ItemTextField]: ModelField<string> } & {
 export type ModelOutput = {
   document_type: DocumentType;
   line_items: ModelItem[];
+  // Optional: INR per 1 unit of the invoice currency, only when the document prints an exchange rate.
+  exchange_rate?: ModelField<number>;
 } & { [K in HeaderTextField]: ModelField<string> } & {
   [K in HeaderAmountField]: ModelField<number>;
 };
@@ -99,6 +101,7 @@ export interface StoredExtracted {
   invoice_date: string | null;
   place_of_supply: string | null;
   currency: string | null;
+  exchange_rate?: number | null; // not stored in its own column; used by the arithmetic checks
   taxable_amount: number | null;
   discount_amount: number | null;
   cgst_amount: number | null;

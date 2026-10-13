@@ -70,7 +70,10 @@ export function validateModelOutput(input: unknown): ValidationResult {
   const errors: string[] = [];
   if (!isRecord(input)) return { ok: false, errors: ["root: must be an object"] };
 
-  checkKeys(input, ["document_type", "line_items", ...HEADER_TEXT_FIELDS, ...HEADER_AMOUNT_FIELDS], "root", errors);
+  // exchange_rate is optional: older readings and plain INR invoices do not have it.
+  const hasRate = "exchange_rate" in input;
+  checkKeys(input, ["document_type", "line_items", ...HEADER_TEXT_FIELDS, ...HEADER_AMOUNT_FIELDS, ...(hasRate ? ["exchange_rate"] : [])], "root", errors);
+  if (hasRate) checkField(input.exchange_rate, "number", "exchange_rate", errors);
 
   if (typeof input.document_type !== "string" || !(DOCUMENT_TYPES as readonly string[]).includes(input.document_type)) {
     errors.push("root.document_type: not an allowed value");
@@ -135,6 +138,7 @@ export function buildResponseSchema() {
     items: { type: "OBJECT", properties: itemProps, required: itemKeys, propertyOrdering: itemKeys },
   };
 
+  props.exchange_rate = fieldSchema("NUMBER");
   const keys = ["document_type", ...HEADER_TEXT_FIELDS, ...HEADER_AMOUNT_FIELDS, "line_items"];
-  return { type: "OBJECT", properties: props, required: keys, propertyOrdering: keys };
+  return { type: "OBJECT", properties: props, required: keys, propertyOrdering: [...keys, "exchange_rate"] };
 }

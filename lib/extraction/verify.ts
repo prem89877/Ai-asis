@@ -130,7 +130,7 @@ export function reconcile(first: ModelOutput, second: ModelOutput, opts: CheckOp
     const base = position ? { itemPosition: position } : {};
     if (sameField(key, a, b)) {
       if (present(a) && !position) agreed.add(key);
-      if (present(a)) target[key] = { ...a, confidence: Math.max(a.confidence, b.confidence) } as AnyField;
+      if (present(a)) target[key] = { ...a, confidence: Math.min(a.confidence, b.confidence) } as AnyField; // lowest of the two readings
       return;
     }
     const record = (resolution: Disagreement["resolution"], reason: string) =>
@@ -189,6 +189,12 @@ export function reconcile(first: ModelOutput, second: ModelOutput, opts: CheckOp
   }
   for (const key of HEADER_AMOUNT_FIELDS) {
     settle(key, "number", first[key], second[key], merged as unknown as Record<string, AnyField>, headerScore(key));
+  }
+
+  // Optional exchange rate: compared like an amount when either reading has it.
+  if (first.exchange_rate || second.exchange_rate) {
+    const none: ModelField<number> = { status: "missing", value: null, confidence: 1 };
+    settle("exchange_rate", "number", first.exchange_rate ?? none, second.exchange_rate ?? none, merged as unknown as Record<string, AnyField>, null);
   }
 
   // Line items are only compared when both readings found the same number of rows. Rows are never matched by guesswork.

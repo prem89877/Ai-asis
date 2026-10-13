@@ -1,6 +1,7 @@
 // Turns validated model output into the shapes stored in the database.
 // Normalization only trims text, upper-cases GSTINs and checks formats. It never changes an amount.
 // Anything that cannot be stored safely becomes null with state "invalid" and a review flag.
+import { suggestGstinFixes, suggestionText } from "./gstin.ts";
 import { HEADER_AMOUNT_FIELDS, HEADER_TEXT_FIELDS } from "./types.ts";
 import type {
   FieldMeta,
@@ -142,14 +143,17 @@ export interface NormalizeOptions {
   agreed?: ReadonlySet<string>;
 }
 
+// Model confidence above which two agreeing readings of a failing GSTIN are treated as a print error.
+export const GSTIN_PRINT_ERROR_CONFIDENCE = 0.95;
+
 // Wording for a GSTIN whose check digit fails. "A character may have been misread" is only said when a
-// misreading is actually possible; if two separate readings agree on all 15 characters the number is
-// most likely printed that way on the invoice itself, so it is shown as information, not as a warning.
-export function gstinChecksumFlagText(confirmedByRecheck: boolean): { severity: "info" | "warning"; message: string } {
-  return confirmedByRecheck
+// misreading is actually possible. If two separate readings agree on all 15 characters with high confidence the
+// number is most likely printed that way on the invoice itself, so it is shown as information, not a warning.
+export function gstinChecksumFlagText(printError: boolean): { severity: "info" | "warning"; message: string } {
+  return printError
     ? {
         severity: "info",
-        message: "This GSTIN does not pass the standard check-digit test, but two readings of the document gave the same 15 characters, so it is most likely printed this way on the invoice.",
+        message: "GSTIN Checksum Mismatch (Possible Print Error). Two readings of the document gave the same 15 characters with high confidence, so it is most likely printed this way on the invoice.",
       }
     : { severity: "warning", message: "The GSTIN check digit does not match. A character may have been misread. Check the original." };
 }
@@ -176,6 +180,17 @@ export function normalizeExtraction(model: ModelOutput, opts: NormalizeOptions):
     }
   }
 
+  // Exchange rate (optional field): INR per 1 unit of the invoice currency. Must be positive to be usable.
+  let exchangeRate: number | null = null;
+  if (model.exchange_rate) {
+    exchangeRate = readAmount(c, "exchange_rate", model.exchange_rate, { dp: 6, max: 1e6 });
+    if (exchangeRate !== null && exchangeRate <= 0) {
+      c.status.exchange_rate = { ...c.status.exchange_rate, state: "invalid" };
+      c.flags.push({ code: "invalid_exchange_rate", severity: "warning", field: "exchange_rate", message: "The exchange rate is not a positive number, so it was not used. Check the original." });
+      exchangeRate = null;
+    }
+  }
+
   // GSTINs: keep what was read (upper-case, no spaces); flag anything that is not a valid GSTIN.
   for (const key of ["supplier_gstin", "buyer_gstin"] as const) {
     const raw = text[key];
@@ -184,10 +199,17 @@ export function normalizeExtraction(model: ModelOutput, opts: NormalizeOptions):
     text[key] = g;
     const check = checkGstin(g);
     if (!check.ok) {
-      const confirmed = check.reason === "checksum" && (opts.agreed?.has(key) ?? false);
+      const confirmed = check.reason === "checksum" && (opts.agreed?.has(key) ?? false) && model[key].confidence > GSTIN_PRINT_ERROR_CONFIDENCE;
       const text = check.reason === "format" ? { severity: "warning" as const, message: "This is not a valid GSTIN format. Check the original." } : gstinChecksumFlagText(confirmed);
+      const suggestions = suggestGstinFixes(g);
       // An info-level note gets its own code, so the "GSTIN invalid" chip and filter (built from the code) stay quiet for it.
-      c.flags.push({ code: text.severity === "info" ? "gstin_checksum_note" : "invalid_gstin", severity: text.severity, field: key, message: text.message, details: { reason: check.reason, ...(confirmed ? { confirmedByRecheck: true } : {}) } });
+      c.flags.push({
+        code: text.severity === "info" ? "gstin_checksum_note" : "invalid_gstin",
+        severity: text.severity,
+        field: key,
+        message: text.message + suggestionText(suggestions),
+        details: { reason: check.reason, ...(confirmed ? { confirmedByRecheck: true } : {}), ...(suggestions.length ? { suggestions } : {}) },
+      });
     }
   }
 
@@ -277,6 +299,7 @@ export function normalizeExtraction(model: ModelOutput, opts: NormalizeOptions):
     invoice_date: invoiceDate,
     place_of_supply: text.place_of_supply,
     currency,
+    exchange_rate: exchangeRate,
     taxable_amount: amt.taxable_value,
     discount_amount: amt.discount_total,
     cgst_amount: amt.cgst,
