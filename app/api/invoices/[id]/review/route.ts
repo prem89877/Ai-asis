@@ -18,7 +18,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const HEADER_SELECT =
-  "vendor_name, buyer_name, vendor_gstin, buyer_gstin, invoice_number, invoice_date, place_of_supply, currency, document_type, taxable_amount, discount_amount, cgst_amount, sgst_amount, igst_amount, cess_amount, total_amount, exchange_rate, tcs_amount, tds_amount, pre_tax_charges, round_off_amount, irn, ack_no, eway_bill_no, field_status, corrected_fields, updated_at";
+  "vendor_name, buyer_name, vendor_gstin, buyer_gstin, invoice_number, invoice_date, place_of_supply, currency, document_type, taxable_amount, discount_amount, cgst_amount, sgst_amount, igst_amount, cess_amount, total_amount, exchange_rate, tcs_amount, tds_amount, pre_tax_charges, round_off_amount, net_payable_amount, irn, ack_no, eway_bill_no, field_status, corrected_fields, updated_at";
 
 function numOrNull(v: unknown): number | null {
   return v === null || v === undefined ? null : Number(v);
@@ -85,6 +85,7 @@ export async function PUT(request: Request, { params }: { params: { id: string }
     tds_amount: numOrNull(row.tds_amount),
     pre_tax_charges: numOrNull(row.pre_tax_charges),
     round_off_amount: numOrNull(row.round_off_amount),
+    net_payable_amount: numOrNull(row.net_payable_amount),
     irn: (row.irn as string | null) ?? null,
     ack_no: (row.ack_no as string | null) ?? null,
     eway_bill_no: (row.eway_bill_no as string | null) ?? null,
