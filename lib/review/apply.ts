@@ -45,7 +45,11 @@ export function applyReview(current: CurrentRecord, input: ReviewInput, userId: 
     header[def.column] = next;
     changes.header[def.column] = { from: prev, to: next };
     if (def.statusKey !== "document_type") fieldStatus[def.statusKey] = humanMeta(next);
-    if (!corrected[def.column]) corrected[def.column] = { original: prev, at: nowIso, by: userId };
+    // Switching between the raw and the auto-validated GSTIN keeps the pair, so the choice can be toggled again.
+    const ac = current.field_status[def.statusKey]?.autoCorrected;
+    const toggle = ac !== undefined && (next === ac.from || next === ac.to);
+    if (toggle) fieldStatus[def.statusKey] = { ...fieldStatus[def.statusKey], autoCorrected: ac };
+    if (!corrected[def.column] && !toggle) corrected[def.column] = { original: prev, at: nowIso, by: userId };
   }
   const headerChanged = Object.keys(changes.header).length > 0;
 

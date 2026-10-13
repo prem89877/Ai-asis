@@ -2,7 +2,7 @@
 // Extraction-time flags are deliberately not carried over: they described the old values.
 // Flags only point at problems. Values are never changed here.
 import { runChecks } from "../extraction/checks.ts";
-import { suggestGstinFixes, suggestionText } from "../extraction/gstin.ts";
+import { GSTIN_AUTO_CORRECTED_LABEL, suggestGstinFixes, suggestionText } from "../extraction/gstin.ts";
 import { checkGstin, gstinChecksumFlagText, GSTIN_PRINT_ERROR_CONFIDENCE } from "../extraction/normalize.ts";
 import type { FieldMeta, ModelOutput, ReviewFlag, StoredExtracted, StoredItem } from "../extraction/types.ts";
 import { HEADER_FIELDS } from "./fields.ts";
@@ -57,7 +57,11 @@ export function computeReviewFlags(h: HeaderValues, fieldStatus: Record<string, 
     const g = doc[col];
     if (g) {
       const c = checkGstin(g);
-      if (!c.ok) {
+      const ac = fieldStatus[key]?.autoCorrected;
+      if (c.ok && ac && g === ac.to) {
+        // Still the automatically validated GSTIN: keep the audit note (info only, never a warning).
+        flags.push({ code: "gstin_auto_corrected", severity: "info", field: key, message: GSTIN_AUTO_CORRECTED_LABEL, details: { gstin_auto_corrected: true, original_raw_gstin: ac.from, corrected_gstin: ac.to } });
+      } else if (!c.ok) {
         // A value a reviewer typed/corrected, or one that two AI readings agreed on with high confidence, is not called "misread".
         const meta = fieldStatus[key];
         const suggestions = suggestGstinFixes(g);
