@@ -2,10 +2,10 @@
 
 Date of work: 12 Oct 2026. Environment of the author: Node 22, **no network, no `node_modules`, no PostgreSQL**. Anything not listed under "Tested" was **not verified**.
 
-## 0. Read this first: files that were missing from the uploaded project
-The uploaded zip (checked twice) does **not** contain:
-`lib/integrations/` (crypto, google, http, mapping, microsoft, oauth, route-helpers, store, sync) and `app/api/exports/tally/route.ts`.
-Consequences: `tests/integrations-core.test.mjs` and `tests/tally.test.mjs` cannot load here (2 failing test files, **pre-existing / caused by the missing files, not by this work**); the real sync engine, token storage, OAuth and Tally route were **not reviewed, audited or tested**; TypeScript and build could not be run. The route tests in `tests/routes-sync.test.mjs` use **mocks** of those modules (`tests/stubs/integrations/`). Re-run everything once the real files are in place, and re-review them for the checks in section 6.
+## 0. Read this first: the integration code was REBUILT in this delivery
+The project zip (checked three times) did **not** contain `lib/integrations/` (9 files) or `app/api/exports/tally/route.ts`, and the owner has no copy of the Phase 6 Part 1 originals. Because the routes, the screens and the existing tests (`integrations-core`, `tally`) depend on them, and because the Vercel build failed with "Module not found: @/lib/integrations/...", these files were **written again from scratch** in Phase 6 Part 2:
+`lib/integrations/crypto.ts, oauth.ts, http.ts, mapping.ts, sync.ts, google.ts, microsoft.ts, store.ts, route-helpers.ts` and `app/api/exports/tally/route.ts`.
+They follow the contract that the old routes, screens and the 38 existing `integrations-core` tests and 12 `tally` tests define, and all of those tests pass. But this is **new, unreviewed code**: it has never talked to a real Google or Microsoft account, never been imported by Tally, and was not written by the original author. Treat it as a first version: review it, and do the end-to-end checks in `docs/PILOT_CHECKLIST.md` section G before any customer uses Sheets or Excel. If you find the original files, compare them with these.
 
 ## 1. Changed-file summary
 **Updated (existing files)**
@@ -19,7 +19,8 @@ Consequences: `tests/integrations-core.test.mjs` and `tests/tally.test.mjs` cann
 - `supabase/tests/phase5_billing.test.sql` (migration names in its header)
 - `docs/PHASE3_SETUP.md`, `PHASE4_SETUP.md`, `PHASE5_SETUP.md`, `PHASE6_PART1_SETUP.md`, `README.md`, `.env.example`, `.gitignore`
 **New**
-- Tests: `tests/routes-exports.test.mjs`, `routes-sync.test.mjs`, `routes-files.test.mjs`, `routes-upload-delete.test.mjs`, `routes-billing-quota.test.mjs`, `security-static.test.mjs`, `regression.test.mjs`
+- Rebuilt code: `lib/integrations/*.ts` (9 files), `app/api/exports/tally/route.ts`
+- Tests: `tests/integrations-server.test.mjs`, `tests/routes-tally.test.mjs`, `tests/routes-exports.test.mjs`, `routes-sync.test.mjs`, `routes-files.test.mjs`, `routes-upload-delete.test.mjs`, `routes-billing-quota.test.mjs`, `security-static.test.mjs`, `regression.test.mjs`
 - Test support: `tests/helpers/alias-hooks.mjs`, `tests/helpers/route-harness.mjs`, `tests/stubs/*` (next-server, next-navigation, supabase-server, supabase-admin, supabase-js, integrations/*)
 - SQL tests: `supabase/tests/phase2_isolation.test.sql`, `supabase/tests/phase6_integrations.test.sql`
 - Docs: `docs/DEPLOYMENT.md`, `docs/PILOT_CHECKLIST.md`, `docs/OPERATIONS.md`, `docs/PHASE6_PART2_RELEASE.md`
@@ -41,15 +42,15 @@ Migration rename map: `20261010000001_schema` > `001_schema`; `20261010000002_rl
 | 9 | No `NEXT_PUBLIC_` variable holds a secret; no client component imports server code | Verified; permanent test |
 | 10 | No sign-up/login IP rate limit or CAPTCHA | Open (see OPERATIONS) |
 | 11 | `npm audit` | **Not run** (no network). Run: `npm ci && npm audit --omit=dev` then `npm audit` |
-| 12 | Integration code (tokens, OAuth, crypto, sync), Tally route | **Not reviewed** (files missing) |
+| 12 | Integration code (tokens, OAuth, crypto, sync) and Tally route | Rewritten in this delivery (see section 0); checked with unit and fake-service tests, **not** with real providers; needs your review |
 
-**Tally exports: history and quota?** Recommendation: **record Tally exports in export history, but do not count them toward the invoice quota.** Reasons: (a) history is your audit trail of what left the system and who sent it; (b) the export rate limit reads `export_history`, so an unrecorded Tally route is unthrottled; (c) quota is metered on extraction (the costly step), exports are not metered anywhere and should stay free. **Not implemented**, because `app/api/exports/tally/route.ts` was not in the zip, and because it needs three coordinated changes: a migration that lets `export_history.format` (currently `xlsx`/`csv`) and `record_export` accept `xml`/`json` with `profile = 'tally'`; the Tally route calling `record_export`; and `GET /api/exports/[id]/download` handling (or refusing) `tally` rows. Send the missing route and this can be done in one small change.
+**Tally exports: history and quota?** Recommendation: **record Tally exports in export history, but do not count them toward the invoice quota.** Reasons: (a) history is your audit trail of what left the system and who sent it; (b) the export rate limit reads `export_history`, so an unrecorded Tally route is unthrottled; (c) quota is metered on extraction (the costly step), exports are not metered anywhere and should stay free. **Not implemented in this delivery** (the Tally route was rebuilt without it, to keep the database unchanged). It needs three coordinated changes: a migration that lets `export_history.format` (currently `xlsx`/`csv`) and `record_export` accept `xml`/`json` with `profile = 'tally'`; the Tally route calling `record_export`; and `GET /api/exports/[id]/download` handling (or refusing) `tally` rows. Ask for it as a separate small change.
 
 **Billing webhooks:** searched the whole codebase for Razorpay, Stripe, PayU, Cashfree, Paytm, checkout and webhook code: **none exists**. Webhooks are **incomplete / not started**; nothing was invented. `tests/routes-billing-quota.test.mjs` contains a guard test that fails if a payment/webhook route is added without tests being written.
 
 **Pre-existing issues (not caused by this work)**
 1. `phase5_part2.sql` broke the timestamp naming and could run out of order (fixed by the rename to `009_billing_fixes.sql`).
-2. `lib/integrations/*` and `app/api/exports/tally/route.ts` missing from the zip.
+2. `lib/integrations/*` and `app/api/exports/tally/route.ts` missing from the zip (rebuilt, see section 0).
 3. Account deletion leaves the firm, its invoices and files in place; firm deletion in SQL leaves files in storage (documented, pinned by SQL test).
 4. `docs/PHASE6_PART1_SETUP.md` said a Phase 6 SQL test did not exist (updated).
 5. Older phase docs describe the old migration file names (updated to the new names).
@@ -84,9 +85,12 @@ Not covered: extraction route itself (`/api/invoices/[id]/extract`) at route lev
 - 7 new JS test files plus test harness (65+ route tests, 12 static checks, 10 regression tests) and 2 new SQL test files.
 - Deployment guide, env-var checklist, migration order, OAuth callback URLs, pilot checklist, operations notes, this report.
 ### (b) Tested (and how)
-- `npm test` (Node 22, `node --test`): **217 tests, 215 pass, 2 test files fail to load** (`integrations-core`, `tally`; both because the missing `lib/integrations` files are not in the zip). This is the final run, after the last code change.
-- New route tests exercise the real route files against in-memory fakes of Supabase and mocks of the cloud modules; mutation checks were done on two guards (exports firm filter and fail-closed limit; static firm-filter and secret scans) and the tests failed as intended.
-- Static scan of the whole zip for secrets, route auth, Origin checks, firm filters, public env names, server-only imports.
+- `npm test` (Node 22, `node --test`): **277 tests, 277 pass** (final run, after the last code change). This includes the previously failing `integrations-core` (38) and `tally` tests, which now load because the missing modules were rebuilt.
+- New route tests exercise the real route files against in-memory fakes of Supabase; `integrations-server.test.mjs` runs the real `route-helpers` and `store` (token refresh, rotation, revoked grant, wrong-firm token, ledger calls) with a mocked `fetch`; `routes-tally.test.mjs` runs the real Tally route. `routes-sync.test.mjs` uses mocks of the provider modules.
+- Mutation checks were done on the exports guards and on the static firm-filter and secret scans; the tests failed as intended.
+- Partial TypeScript check (`tsc --strict`, only `lib/integrations`, `lib/tally`, `lib/api`, and the integration, export and invoice API routes, with stubbed `next` and Supabase types): no errors. This is **not** the real `tsc` of your project.
+- Static scan of the whole project for secrets, route auth, Origin checks, firm filters, public env names, server-only imports.
+
 ### (c) Configured but untested
 - `supabase/tests/phase2_isolation.test.sql` and `phase6_integrations.test.sql` (and the older phase 3 to 5 SQL tests): written, **never executed** (no PostgreSQL). Expect small first-run fixes.
 - Migrations 001 to 010 on a real database in the new order.
@@ -97,13 +101,13 @@ Not covered: extraction route itself (`/api/invoices/[id]/extract`) at route lev
 ### (d) Incomplete or not started
 - Billing webhooks and any payment gateway: **not started**.
 - Tally exports in history: recommended, **not implemented** (route missing).
-- `lib/integrations/*` review and audit; real-module route tests: **blocked**.
-- `npm install`, `tsc`, lint, `next build`, `npm audit`: **not run** (no network).
+- Independent review of the rebuilt `lib/integrations/*`; tests against real Google and Microsoft accounts.
+- `npm install`, the real `tsc`, lint, `next build`, `npm audit`: **not run** (no network). The Vercel log you sent shows the build failing only on the missing modules; other build errors, if any, are unknown until the build is run again.
 - Account-deletion workflow, bucket backup job, monitoring/alerts, sign-up abuse protection: not built.
 - Route tests for extraction, review-save, OAuth, connection routes; browser/UI tests.
 
-## 6. Check these in the real integration files when you send them
-1. Server code that reads `integration_connections` through the **user's** Supabase client must list columns (`select *` is refused by the database for browser sessions) or use the service-role client.
+## 6. Review these points in the rebuilt integration files
+1. Server code reads `integration_connections` with the service-role client (`route-helpers`) or the safe column list (`PUBLIC_CONNECTION_COLUMNS`); `select *` through a user session is refused by the database. Done; keep it that way.
 2. Tokens are encrypted with AES-GCM, never logged, never returned to the browser; callback verifies `state` and PKCE and that the user and firm match the stored state.
 3. Only owners/admins can connect, disconnect, map and sync.
 4. Provider error text is not shown to users or stored unfiltered.

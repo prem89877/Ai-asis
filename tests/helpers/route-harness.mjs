@@ -29,6 +29,7 @@ export function createDb(tables = {}, { rpc = {} } = {}) {
       eq(c, v) { q.filters.push(["eq", c, v]); return api; },
       in(c, v) { q.filters.push(["in", c, v]); return api; },
       gte(c, v) { q.filters.push(["gte", c, v]); return api; },
+      neq(c, v) { q.filters.push(["neq", c, v]); return api; },
       order(c, o) { q.order.push([c, o?.ascending !== false]); return api; },
       limit(n) { q.limit = n; return api; },
       range(a, b) { q.range = [a, b]; return api; },
@@ -40,14 +41,14 @@ export function createDb(tables = {}, { rpc = {} } = {}) {
         writes.push({ table, op: q.op, patch: q.patch, filters: q.filters.map((f) => [...f]) });
         const err = ctl.writeErrors[table + ":" + q.op];
         if (err) return Promise.resolve({ data: null, error: err });
-        const hit = (r) => q.filters.every(([op, c, v]) => (op === "eq" ? r[c] === v : op === "in" ? v.includes(r[c]) : r[c] >= v));
+        const hit = (r) => q.filters.every(([op, c, v]) => (op === "eq" ? r[c] === v : op === "neq" ? r[c] !== v : op === "in" ? v.includes(r[c]) : r[c] >= v));
         if (q.op === "update") { for (const r of data[table] ?? []) if (hit(r)) Object.assign(r, q.patch); }
         else if (q.op === "delete") data[table] = (data[table] ?? []).filter((r) => !hit(r));
         return Promise.resolve({ data: null, error: null });
       }
       log.push({ table, filters: q.filters.map((f) => [...f]), cols: q.cols, opts: q.opts });
       if (errors[table]) return Promise.resolve({ data: null, error: errors[table], count: null });
-      let rows = (data[table] ?? []).filter((r) => q.filters.every(([op, c, v]) => (op === "eq" ? r[c] === v : op === "in" ? v.includes(r[c]) : r[c] >= v)));
+      let rows = (data[table] ?? []).filter((r) => q.filters.every(([op, c, v]) => (op === "eq" ? r[c] === v : op === "neq" ? r[c] !== v : op === "in" ? v.includes(r[c]) : r[c] >= v)));
       for (const [c, asc] of [...q.order].reverse()) rows = [...rows].sort((a, b) => (a[c] > b[c] ? 1 : a[c] < b[c] ? -1 : 0) * (asc ? 1 : -1));
       const count = rows.length;
       if (q.range) rows = rows.slice(q.range[0], q.range[1] + 1);
@@ -99,9 +100,9 @@ export const F1 = "11111111-1111-4111-8111-1111111111f1";
 export const F2 = "22222222-2222-4222-8222-2222222222f2";
 
 // Installs the fake world for the next request: who is signed in, which firm they belong to, what is in the database.
-export function world({ user = U1, role = "owner", firm = F1, tables = {}, rpc = {}, admin = true, members, objects = {} } = {}) {
+export function world({ user = U1, role = "owner", firm = F1, tables = {}, rpc = {}, admin = true, members, objects = {}, adminTables = {} } = {}) {
   const db = createDb({ firm_members: members ?? (user ? [{ user_id: user.id, firm_id: firm, role, created_at: "2026-01-01" }] : []), ...tables }, { rpc });
-  const adminDb = createDb({}, { rpc });
+  const adminDb = createDb(adminTables, { rpc });
   globalThis.__h = { db, client: userClient(db, user, objects), admin: admin ? adminDb : null, adminDb, integ: { calls: [] } };
   return globalThis.__h;
 }
