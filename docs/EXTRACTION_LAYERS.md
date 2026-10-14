@@ -71,3 +71,23 @@ Runs after normalization and the GST engine. It only adds a report (`validation_
 | 3 | evidence | GSTIN verdict (witnesses above), supplier / buyer name and place of supply against the parties reading (names are compared softly: "Acme" = "Acme Pvt Ltd"), grand total consensus status |
 
 A field is `verified` only if it passed every layer that had something to say about it; otherwise `needs_review` with the layers and reasons. Flags: `gstin_unverified` / `gstin_conflict` (one per GSTIN, not repeated when `invalid_gstin` or `gstin_checksum_note` already explains it), and ONE `verification_failed` for all other fields. Any warning sends the invoice to review. `verification.passed` / `complete` and `verification.gstin.*` (status, vote method, witnesses, evidence, problems) are stored with the invoice.
+
+## Line-item maths auto-correction (lib/extraction/line-fix.ts)
+
+When `quantity x unit price (less discount) x exchange rate` does not equal a line's taxable value, the system first tries to
+repair a misread digit (INR 10,000 read as 1,000) before a human is asked.
+
+A value is corrected only when ALL of this holds:
+
+1. The line fails the normal line arithmetic (same tolerance, discount and exchange-rate rules).
+2. Only quantity, unit price or taxable value can change; the solved value must look like a real misread (dropped or added digit,
+   shifted decimal point, one wrong digit, two swapped digits).
+3. Score of at least 2 and strictly higher than any other candidate. One point per independent witness (GST amount = taxable x rate,
+   line total = taxable + GST, sum of items = invoice taxable value) plus one point when the model's confidence for that field is
+   clearly the lowest of the three and below `EXTRACTION_LINE_FIX_MAX_CONFIDENCE` (default 0.95).
+4. A value the model read with confidence at or above that limit is corrected only when all three witnesses agree.
+5. Foreign currency lines are corrected only when the invoice prints an exchange rate.
+
+Audit trail: `field_status[...].autoCorrected = { from, to }` (source `computed`), an info flag `line_item_auto_corrected` (with the
+original value, witnesses and original confidence) and the untouched `raw_extraction`. If nothing can be proven the line keeps its
+`arithmetic_line_mismatch` warning and an info note `line_autofix_skipped` gives the reason. Switch off with `EXTRACTION_LINE_FIX=off`.
