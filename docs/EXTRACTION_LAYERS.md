@@ -47,7 +47,7 @@ A GSTIN is the value that is most often misread (one wrong character), and a wro
 1. Same 15 characters in every reading: kept.
 2. Readings differ, exactly one distinct value passes layout + Modulo-36 check digit + valid state code: that one.
 3. Two different valid numbers: a strict majority decides, otherwise it stays a conflict.
-4. No reading is valid on its own: **character by character**. The majority character per position is used if the result passes the check digit; otherwise every combination of characters that were really read is tried and used only if exactly one passes. Reported as `gstin_char_voted` (info).
+4. No reading is valid on its own: **character by character** is tried only to build a *proposal*. A GSTIN that no reading gave as a whole is never saved: the value that was read stays and a `gstin_char_proposed` warning shows the assembled number for the reviewer. A single check-digit-valid reading also does not outvote more readings that agree on another value (`conflict`, first reading kept).
 5. Nothing proves anything: first reading kept, `recheck_mismatch` as before. No character is ever invented.
 
 **Evidence** (`judgeGstin`). Witnesses = readings that gave exactly this value + the printed PAN (characters 3-12 are the PAN) + the state printed in the supplier block (characters 1-2) + the value being in the list of all printed GSTINs with the right role.
