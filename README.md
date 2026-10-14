@@ -46,3 +46,6 @@ Release report, deployment guide, pilot checklist and operations notes: `docs/PH
 
 ## GST validation engine
 Unified GST checks (mixed IGST + CGST/SGST, TCS/TDS, pre-tax charges, round-off, multi-slab, negative lines, e-invoice metadata): `lib/extraction/gst-engine.ts`, migrations `011_gst_engine.sql` and `012_net_payable.sql`, notes in `docs/GST_ENGINE.md`.
+
+## Source-grounded second verification
+Suspicious values only are re-read from the original file, judged in code, corrected only with proof, audited in `validation_summary.source_verification`. See `docs/SOURCE_VERIFICATION.md`. New optional variable: `EXTRACTION_SOURCE_VERIFY` (default on).
