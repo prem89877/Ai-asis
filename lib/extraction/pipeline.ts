@@ -9,6 +9,9 @@ import { estimateCostUsd } from "./gemini.ts";
 import type { GeminiCaller, GeminiCallResult } from "./gemini.ts";
 import { getCheckConfig } from "./config.ts";
 import type { CheckConfig, GeminiConfig } from "./config.ts";
+import { resolveForex } from "./forex.ts";
+import type { ForexResult } from "./forex.ts";
+import type { FxLookup } from "./fx-rates.ts";
 import { checkSupplierOnPortal } from "./gst-portal.ts";
 import type { GstLookup } from "./gst-portal.ts";
 import { reconcileLineItems } from "./line-fix.ts";
@@ -82,6 +85,7 @@ export interface PipelineDeps {
   geminiConfig: GeminiConfig;
   checkConfig?: CheckConfig;
   gstPortal?: GstLookup | null; // live GST portal lookup of the supplier GSTIN (gst-portal.ts); null / absent = not configured
+  fx?: FxLookup | null; // historical exchange rate of the invoice date for foreign currency invoices (fx-rates.ts); null / absent = off
   maxPdfPages: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -454,12 +458,33 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
       lineFixFlags.push(...fix.flags);
       if (fix.fixed > 0) log("extraction_line_autofix", { jobId: ctx.jobId, fixed: fix.fixed, skipped: fix.skipped });
     }
-    const flags: ReviewFlag[] = [...extracted.review_flags, ...runChecks(extracted, items, checkCfg), ...recheckNotes, ...lineFixFlags];
+
+    // Foreign currency (import / cross-border) invoice: a printed exchange rate is kept and cross-checked; when none is printed the
+    // reference rate of the invoice date is fetched (forex.ts) BEFORE the checks, so line and total maths can be verified in INR.
+    // Line auto-correction above ran without it on purpose: a fetched market rate must never be used to "correct" a read value.
+    const forexFlags: ReviewFlag[] = [];
+    let forex: ForexResult | null = null;
+    if (deps.fx && checkCfg.forex !== false) {
+      const left = cfg.deadlineMs - (now() - started) - VERIFY_SAVE_MARGIN_MS;
+      if (left >= 3_000) {
+        try {
+          forex = await resolveForex(extracted, items, deps.fx, { tolerancePaise: checkCfg.tolerancePaise });
+          forexFlags.push(...forex.flags);
+          if (forex.exchangeRate !== null && forex.fieldMeta) {
+            extracted.exchange_rate = forex.exchangeRate;
+            extracted.field_status.exchange_rate = forex.fieldMeta;
+          }
+        } catch {
+          log("extraction_forex_error", { jobId: ctx.jobId });
+        }
+      }
+    }
+    const flags: ReviewFlag[] = [...extracted.review_flags, ...runChecks(extracted, items, checkCfg), ...recheckNotes, ...lineFixFlags, ...forexFlags];
 
     // GST validation engine verdict: saved with the invoice. A difference of up to INR 2.00 between the calculated and the
     // printed grand total is recorded as round_off_amount (source "computed"), so the original figures are never changed.
     const gstVerdict = validateInvoice({ extracted, items }, { tolerancePaise: checkCfg.tolerancePaise });
-    extracted.validation_summary = { ...(gstVerdict.summary as unknown as Record<string, unknown>), ...(totalSummary(verdict, layerCount)) };
+    extracted.validation_summary = { ...(gstVerdict.summary as unknown as Record<string, unknown>), ...(totalSummary(verdict, layerCount)), ...(forex && forex.summary ? { forex: forex.summary } : {}) };
     if (gstVerdict.patch.round_off_amount !== undefined) {
       extracted.round_off_amount = Math.round(gstVerdict.patch.round_off_amount * 100) / 100;
       extracted.field_status.round_off_amount = { state: "value", confidence: 1, source: "computed" };

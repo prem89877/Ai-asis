@@ -33,6 +33,13 @@ export interface CheckConfig {
   tolerancePaise: number; // arithmetic tolerance (100 = INR 1.00)
   lineFix?: boolean; // correct a misread quantity / unit price / taxable value when the line maths and independent evidence prove it (EXTRACTION_LINE_FIX=off to disable)
   lineFixMaxConfidence?: number; // a value the model read with at least this confidence is only corrected when all three witnesses agree (default 0.95)
+  forex?: boolean; // fetch the exchange rate of the invoice date for foreign currency invoices that print none (EXTRACTION_FOREX=off to disable)
+}
+
+// Foreign exchange rate lookup (fx-rates.ts). Free public sources, no API key.
+export interface FxConfig {
+  enabled: boolean;
+  timeoutMs: number; // per HTTP call
 }
 
 type Env = Record<string, string | undefined>;
@@ -100,5 +107,10 @@ export function getCheckConfig(env: Env = process.env): CheckConfig {
     tolerancePaise: int(env, "EXTRACTION_TOLERANCE_PAISE", 100, 0, 100_000),
     lineFix: switchedOn(env.EXTRACTION_LINE_FIX),
     lineFixMaxConfidence: num(env, "EXTRACTION_LINE_FIX_MAX_CONFIDENCE", 0.95, 0, 1),
+    forex: switchedOn(env.EXTRACTION_FOREX),
   };
+}
+
+export function getFxConfig(env: Env = process.env): FxConfig {
+  return { enabled: switchedOn(env.EXTRACTION_FOREX), timeoutMs: int(env, "FX_TIMEOUT_MS", 2_500, 500, 10_000) };
 }

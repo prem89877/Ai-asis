@@ -16,11 +16,22 @@ import type { ReviewFlag, StoredItem } from "./types.ts";
 const RATE_REL_TOLERANCE = 0.0005;
 // Lines whose taxable/net ratios agree this closely are treated as converted with one common rate.
 const MAX_PLAUSIBLE_RATE = 1_000_000;
+// A rate that was FETCHED from a public source (not printed on the invoice) is a market reference rate, so the rate the
+// supplier actually used can differ from it by a little. Lines are accepted within this fraction (3 %); beyond it they are flagged.
+export const FETCHED_RATE_REL_TOLERANCE = 0.03;
+export { RATE_REL_TOLERANCE };
+
+// Which relative tolerance applies to the exchange rate of this invoice: tight for a printed rate, wider for a fetched one.
+export function rateToleranceFor(fieldStatus: Record<string, { source?: string }> | null | undefined): number {
+  return fieldStatus?.exchange_rate?.source === "fetched" ? FETCHED_RATE_REL_TOLERANCE : RATE_REL_TOLERANCE;
+}
 
 export interface ArithmeticContext {
   currency: string | null;
   exchangeRate: number | null | undefined;
   tolerancePaise: number;
+  rateTolerance?: number; // relative tolerance of the exchange rate (default 0.05 %; wider when the rate was fetched, see rateToleranceFor)
+  rateFetched?: boolean; // the rate came from a public source, not from the invoice
 }
 
 function nz(v: number | null): number {
@@ -93,7 +104,7 @@ export function lineCandidates(it: Pick<StoredItem, "quantity" | "unit_price" | 
 // The conversion rate that most lines agree on, found from the lines themselves (taxable / net).
 // Each line offers one candidate rate per discount reading; the rate supported by the most lines wins.
 // If no two lines agree, fall back to the median of the plain (flat discount) ratios.
-function impliedRate(items: StoredItem[]): number | null {
+export function impliedRate(items: StoredItem[], strict = false): number | null {
   const perLine: number[][] = [];
   const plain: number[] = [];
   for (const it of items) {
@@ -104,6 +115,7 @@ function impliedRate(items: StoredItem[]): number | null {
     plain.push(it.taxable_amount / cands[0].net);
   }
   if (perLine.length < 2) return null;
+  // strict: only a rate that at least two lines agree on counts (a single line always "agrees" with its own ratio)
   const near = (a: number, b: number) => Math.abs(a - b) <= Math.abs(b) * RATE_REL_TOLERANCE;
   let best: { support: number; rates: number[] } | null = null;
   for (const r of perLine.flat()) {
@@ -111,7 +123,7 @@ function impliedRate(items: StoredItem[]): number | null {
     if (!best || matched.length > best.support) best = { support: matched.length, rates: matched };
   }
   if (best && best.support >= 2) return median(best.rates);
-  return median(plain);
+  return strict ? null : median(plain);
 }
 
 export interface LineRateContext {
@@ -119,10 +131,12 @@ export interface LineRateContext {
   foreign: boolean;
   explicitRate: number | null; // exchange rate printed on the invoice
   impliedRate: number | null; // rate found from the other lines
+  rateTolerance?: number;
+  rateFetched?: boolean;
 }
 
 export type LineVerdict =
-  | { status: "pass"; expectedPaise: number }
+  | { status: "pass"; expectedPaise: number; basis?: "invoice_currency" | "inr" } // basis: the printed taxable value is in the invoice currency, or already in INR
   | { status: "unverified" } // foreign currency but nothing to convert with
   | { status: "skipped" } // quantity, unit price or taxable value is missing
   | { status: "fail"; expectedPaise: number; flag: ReviewFlag };
@@ -147,7 +161,7 @@ export function validateLineItem(it: StoredItem, position: number, rc: LineRateC
   // Values exactly as printed in one currency: every reading of the discount, plus gross.
   const plain = [...cands.map((c) => toPaise(c.net)), toPaise(gross)];
   const plainOk = withSign(plain);
-  if (plainOk.some((e) => within(e, 0))) return { status: "pass", expectedPaise: plain[0] };
+  if (plainOk.some((e) => within(e, 0))) return { status: "pass", expectedPaise: plain[0], basis: "invoice_currency" };
 
   let rateUsed: number | null = null;
   if (rc.foreign) {
@@ -158,7 +172,8 @@ export function validateLineItem(it: StoredItem, position: number, rc: LineRateC
       toPaise(gross * r),
       toPaise(gross * r - nz(disc)), // flat discount already in INR
     ]);
-    if (converted.some((e) => within(e, RATE_REL_TOLERANCE))) return { status: "pass", expectedPaise: converted[0] };
+    const relTol = rc.rateTolerance ?? RATE_REL_TOLERANCE;
+    if (converted.some((e) => within(e, relTol))) return { status: "pass", expectedPaise: converted[0], basis: "inr" };
     rateUsed = r;
   }
 
@@ -173,7 +188,7 @@ export function validateLineItem(it: StoredItem, position: number, rc: LineRateC
     message: rateUsed === null
       ? "Quantity x unit price does not match the item's taxable value."
       : `Quantity x unit price (less discount) x exchange rate ${Math.round(rateUsed * 10000) / 10000} does not match the item's taxable value.`,
-    details: { expected: expected / 100, extracted: actual / 100, ...(rateUsed === null ? {} : { exchangeRate: rateUsed, rateSource: rc.explicitRate !== null ? "printed" : "from other lines" }) },
+    details: { expected: expected / 100, extracted: actual / 100, ...(rateUsed === null ? {} : { exchangeRate: rateUsed, rateSource: rc.explicitRate !== null ? (rc.rateFetched ? "auto-fetched reference rate" : "printed") : "from other lines" }) },
   };
   return { status: "fail", expectedPaise: expected, flag };
 }
@@ -187,6 +202,8 @@ export function checkLineItems(items: StoredItem[], ctx: ArithmeticContext): Rev
     foreign,
     explicitRate,
     impliedRate: foreign && explicitRate === null ? impliedRate(items) : null,
+    rateTolerance: ctx.rateTolerance,
+    rateFetched: ctx.rateFetched,
   };
   let unverified = false;
   items.forEach((it, i) => {

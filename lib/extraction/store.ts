@@ -2,6 +2,7 @@
 // Uses the service-role client, so every query here is explicitly scoped by firm_id
 // and the caller must already have authorized the user.
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { FxCache, FxRate } from "./fx-rates.ts";
 import type { CompleteArgs, CompleteResult, DuplicateCandidate, DuplicateQuery, ExtractionStore, FileSource, UsageRecordInput } from "./pipeline.ts";
 
 export function createSupabaseStore(admin: SupabaseClient): ExtractionStore {
@@ -122,6 +123,24 @@ export function createSupabaseFiles(admin: SupabaseClient): FileSource {
       const { data, error } = await admin.storage.from("invoices").download(path);
       if (error || !data) return null;
       return new Uint8Array(await data.arrayBuffer());
+    },
+  };
+}
+
+// Persistent cache of historical exchange rates (table fx_rates, migration 013). A past day's rate never changes, so a hit is final.
+// Service-role only. Every error is swallowed by the caller: a cache problem must never stop an extraction.
+export function createSupabaseFxCache(admin: SupabaseClient): FxCache {
+  return {
+    async get(currency: string, date: string): Promise<FxRate | null> {
+      const { data, error } = await admin.from("fx_rates").select("currency, requested_date, rate_date, rate, source, source_label").eq("currency", currency).eq("requested_date", date).maybeSingle();
+      if (error || !data) return null;
+      const r = data as { currency: string; requested_date: string; rate_date: string; rate: number | string; source: FxRate["source"]; source_label: string };
+      const rate = Number(r.rate);
+      if (!Number.isFinite(rate) || rate <= 0) return null;
+      return { currency: r.currency, rate, requestedDate: r.requested_date, rateDate: r.rate_date, source: r.source, sourceLabel: r.source_label };
+    },
+    async set(r: FxRate): Promise<void> {
+      await admin.from("fx_rates").upsert({ currency: r.currency, requested_date: r.requestedDate, rate_date: r.rateDate, rate: r.rate, source: r.source, source_label: r.sourceLabel }, { onConflict: "currency,requested_date" });
     },
   };
 }

@@ -8,7 +8,7 @@
 //   total level  : validateInvoiceTotals()  two-tier total: grand total (taxable + taxes + TCS) OR net payable (- TDS), +/- round-off (Rule 3)
 //   cross check  : tripleCheckTax()         printed header tax  vs  printed line tax  vs  rate x taxable  vs  state rule
 // An invoice is shown as "verified" only when every method that could run agrees. Disagreement is never hidden.
-import { checkLineItems, hasRate, isForeign } from "./arithmetic.ts";
+import { checkLineItems, hasRate, isForeign, rateToleranceFor } from "./arithmetic.ts";
 import { describeIdentifierProblem, isValidAckNo, isValidEwayBill, isValidIrn } from "./identifiers.ts";
 import { toPaise } from "./normalize.ts";
 import type { ReviewFlag, StoredExtracted, StoredItem } from "./types.ts";
@@ -17,7 +17,6 @@ export { validateLineItem } from "./arithmetic.ts";
 
 // A difference up to this (INR 2.00) is absorbed into round_off_amount and the total check PASSES.
 export const ROUND_OFF_MAX_PAISE = 200;
-const RATE_REL_TOLERANCE = 0.0005;
 const MAX_INFERENCE_LINES = 16; // 2^16 line splits are tried when IGST and CGST/SGST are mixed and lines carry no tax type
 
 export interface EngineOptions {
@@ -182,6 +181,7 @@ export function validateInvoiceTotals(e: StoredExtracted, items: StoredItem[], o
   const tol = opts.tolerancePaise;
   const fs = e.field_status ?? {};
   const foreignRate = isForeign(e.currency, e.exchange_rate) && hasRate(e.exchange_rate) ? e.exchange_rate : null;
+  const rateTol = rateToleranceFor(fs); // wider when the exchange rate was fetched instead of printed
   const itemsKnown = items.length > 0 && items.every((it) => it.taxable_amount !== null);
   const itemsSum = itemsKnown ? items.reduce((a, it) => a + toPaise(it.taxable_amount as number), 0) : null;
   const charges = has(e.pre_tax_charges) ? toPaise(e.pre_tax_charges) : null;
@@ -231,8 +231,8 @@ export function validateInvoiceTotals(e: StoredExtracted, items: StoredItem[], o
     }
   }
   if (foreignRate !== null) { // total printed in the foreign currency while taxable and taxes are in INR
-    variants.push({ value: Math.round(tier1(base0) / foreignRate), rel: RATE_REL_TOLERANCE, tier: "grand_total" });
-    if (tds !== 0) variants.push({ value: Math.round(tier2(base0) / foreignRate), rel: RATE_REL_TOLERANCE, tier: "net_payable" });
+    variants.push({ value: Math.round(tier1(base0) / foreignRate), rel: rateTol, tier: "grand_total" });
+    if (tds !== 0) variants.push({ value: Math.round(tier2(base0) / foreignRate), rel: rateTol, tier: "net_payable" });
   }
   // Credit / debit notes and returns: the printed total can carry the opposite sign.
   const signed = variants.flatMap((v) => (actual < 0 !== v.value < 0 && actual !== 0 ? [v, { ...v, value: -v.value }] : [v]));
@@ -494,7 +494,7 @@ export interface InvoiceValidation {
 
 export function validateInvoice(data: InvoiceData, opts: EngineOptions): InvoiceValidation {
   const { extracted: e, items } = data;
-  const ctx = { currency: e.currency, exchangeRate: e.exchange_rate, tolerancePaise: opts.tolerancePaise };
+  const ctx = { currency: e.currency, exchangeRate: e.exchange_rate, tolerancePaise: opts.tolerancePaise, rateTolerance: rateToleranceFor(e.field_status), rateFetched: e.field_status?.exchange_rate?.source === "fetched" };
 
   const lineFlags = checkLineItems(items, ctx);
   const alloc = validateTaxAllocation(e, items, opts.tolerancePaise);
