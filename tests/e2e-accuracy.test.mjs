@@ -122,11 +122,22 @@ test("blurry or poorly scanned: a re-read that is unreadable, low-confidence or 
     assert.equal(r.result.outcome, "needs_review", mode);
     assert.equal(r.extracted.field_status.grand_total.autoCorrected, undefined, mode);
   }
-  // an unreadable total is never filled in from a single re-read
+  // an unreadable total IS filled in from the source re-read, but only because it ties to taxable value + taxes (invoice arithmetic)
   const blurry = await runScenario("blurry-total-unreadable-reread-ok");
-  assert.equal(blurry.extracted.total_amount, null);
-  assert.ok(blurry.extracted.review_flags.some((x) => x.code === "source_verify_unresolved" && x.field === "grand_total"));
-  assert.equal(blurry.result.outcome, "needs_review");
+  const blurryTruth = sc("blurry-total-unreadable-reread-ok").truth;
+  assert.equal(blurry.extracted.total_amount, blurryTruth.grand_total.value);
+  assert.equal(blurry.extracted.field_status.grand_total.state, "value");
+  assert.equal(blurry.extracted.field_status.grand_total.source, "source_check");
+  assert.ok(blurry.extracted.review_flags.some((x) => x.code === "source_verify_corrected" && x.field === "grand_total"));
+  assert.equal(blurry.extracted.review_flags.some((x) => x.code === "unreadable_field" || x.code === "missing_required"), false);
+  assert.equal(blurry.result.outcome, "completed");
+  // ... and a re-read total that does NOT tie to the arithmetic, or an unreadable / low-confidence / ambiguous one, is only a proposal
+  for (const mode of ["unreadable", "lowconf", "ambiguous", "none", "wrong"]) {
+    const r = await run({ reading: sc("blurry-total-unreadable-reread-ok").reading, answers: { source: oracle(blurryTruth, { mode, wrong: (t) => (t.find === "grand total" ? 9999 : null) }) } });
+    assert.equal(r.extracted.total_amount, null, mode);
+    assert.equal(r.result.outcome, "needs_review", mode);
+    if (mode !== "none") assert.ok(r.extracted.review_flags.some((x) => x.field === "grand_total" && (x.code === "source_verify_unresolved" || x.code === "unreadable_field")), mode);
+  }
   // correct values that merely have low confidence are confirmed, not "corrected"
   const lowConf = await runScenario("blurry-correct-values-low-confidence");
   assert.equal(lowConf.extracted.total_amount, sc("blurry-correct-values-low-confidence").truth.grand_total.value);
@@ -156,18 +167,38 @@ test("GSTIN: a wrong check digit is corrected only from a valid, grounded re-rea
   assert.equal(fixed.extracted.vendor_gstin, SUPPLIER_GSTIN);
   assert.deepEqual(fixed.extracted.field_status.supplier_gstin.autoCorrected, { from: "27AAPFU0939F1ZW", to: SUPPLIER_GSTIN });
   assert.equal((await runScenario("gstin-buyer-digit")).extracted.buyer_gstin, BUYER_GSTIN_MH);
-  // KNOWN BEHAVIOUR (documented): the earlier "check digit does not match" warning is not removed, so a corrected GSTIN still goes to review.
-  assert.equal(fixed.result.outcome, "needs_review");
+  // The earlier "check digit does not match" warning described the replaced value, so it is removed: a corrected GSTIN no longer goes to review.
+  assert.equal(fixed.extracted.review_flags.some((x) => (x.code === "invalid_gstin" || x.code === "gstin_checksum_note") && x.field === "supplier_gstin"), false);
+  assert.equal(fixed.result.outcome, "completed");
   assert.ok(fixed.extracted.review_flags.some((x) => x.code === "source_verify_corrected" && x.field === "supplier_gstin"));
   const same = await runScenario("gstin-wrong-reread-same");
   assert.equal(same.extracted.vendor_gstin, "27AAPFU0939F1ZW");
   assert.equal(same.result.outcome, "needs_review");
   const invalidReread = await run({ reading: sc("gstin-supplier-digit").reading, answers: { source: oracle(sc("gstin-supplier-digit").truth, { mode: "wrong", wrong: (t) => (t.find === "supplier GSTIN" ? "27AAPFU0939F1Z8" : null) }) } });
   assert.equal(invalidReread.extracted.vendor_gstin, "27AAPFU0939F1ZW");
+  // A MISSING supplier GSTIN is now re-read from the source. A valid, grounded, confident re-read fills it (with proof and a note) ...
   const missingG = await runScenario("gstin-supplier-missing");
-  assert.equal(missingG.extracted.vendor_gstin, null);
-  assert.equal(missingG.result.outcome, "needs_review");
-  assert.ok(missingG.extracted.review_flags.some((x) => x.code === "missing_field" && x.field === "supplier_gstin" && x.severity === "warning"));
+  assert.equal(missingG.callsBy("source").length, 1);
+  assert.equal(missingG.extracted.vendor_gstin, SUPPLIER_GSTIN);
+  assert.equal(missingG.extracted.field_status.supplier_gstin.state, "value");
+  assert.equal(missingG.extracted.field_status.supplier_gstin.source, "source_check");
+  assert.ok(missingG.extracted.review_flags.some((x) => x.code === "source_verify_corrected" && x.field === "supplier_gstin"));
+  assert.equal(missingG.extracted.review_flags.some((x) => x.code === "missing_field" && x.field === "supplier_gstin"), false);
+  assert.equal(missingG.result.outcome, "completed");
+  // ... but it is never invented: the original also has none, or the re-read gives the BUYER's GSTIN, or the re-read is not trustworthy.
+  const noneOnDoc = await run({ reading: sc("gstin-supplier-missing").reading, answers: { source: oracle({ ...sc("gstin-supplier-missing").truth, supplier_gstin: missing() }) } });
+  assert.equal(noneOnDoc.extracted.vendor_gstin, null);
+  assert.equal(noneOnDoc.result.outcome, "needs_review");
+  assert.ok(noneOnDoc.extracted.review_flags.some((x) => x.code === "missing_field" && x.field === "supplier_gstin" && x.severity === "warning"));
+  const buyerAsSupplier = await run({ reading: sc("gstin-supplier-missing").reading, answers: { source: oracle(sc("gstin-supplier-missing").truth, { mode: "wrong", wrong: (t) => (t.find === "supplier GSTIN" ? BUYER_GSTIN_MH : null) }) } });
+  assert.equal(buyerAsSupplier.extracted.vendor_gstin, null);
+  assert.equal(buyerAsSupplier.result.outcome, "needs_review");
+  assert.ok(buyerAsSupplier.extracted.review_flags.some((x) => x.code === "source_verify_unresolved" && x.field === "supplier_gstin"));
+  for (const mode of ["unreadable", "lowconf", "ambiguous"]) {
+    const r = await run({ reading: sc("gstin-supplier-missing").reading, answers: { source: oracle(sc("gstin-supplier-missing").truth, { mode }) } });
+    assert.equal(r.extracted.vendor_gstin, null, mode);
+    assert.equal(r.result.outcome, "needs_review", mode);
+  }
   // whatever happens, no saved GSTIN that passes through the source layer fails the check digit unless it was already there
   for (const id of ["gstin-supplier-digit", "gstin-buyer-digit"]) {
     const r = await runScenario(id);
@@ -185,11 +216,19 @@ test("CGST / SGST versus IGST: misread tax heads are corrected, and a tax type p
   assert.equal(printed.extracted.igst_amount, 351); // not "fixed" into CGST + SGST
   assert.equal(printed.extracted.cgst_amount, null);
   assert.equal(printed.callsBy("source").length, 0);
-  // FINDING (not changed here, it predates Parts 1-3): the extraction pipeline does not run the review-time GST type rule, so this
-  // invoice is saved as "completed". The rule exists and catches it as soon as the review code evaluates the saved record:
+  // The extraction pipeline now runs the supplier-state vs place-of-supply rule too: the value is kept as printed, but the invoice is
+  // flagged at extraction time and is NOT saved as "completed". The review screen raises the same flag when it re-evaluates the record.
+  const mismatch = printed.extracted.review_flags.filter((x) => x.code === "gst_type_mismatch");
+  assert.equal(mismatch.length, 1);
+  assert.equal(mismatch[0].severity, "warning");
+  assert.equal(printed.result.outcome, "needs_review");
   const reviewFlags = gstChecks({ ...printed.extracted }, printed.items, { tolerancePaise: 100 });
   assert.ok(reviewFlags.some((x) => x.code === "gst_type_mismatch"));
-  assert.equal(printed.extracted.review_flags.some((x) => x.code === "gst_type_mismatch"), false);
+  // the opposite case and the legitimate ones stay quiet: CGST + SGST on an inter-state invoice is flagged, IGST on inter-state is not
+  const interCgst = await run({ reading: set(sc("clear-intra-state").reading, "place_of_supply", "Karnataka (29)"), answers: {} });
+  assert.equal(interCgst.extracted.review_flags.filter((x) => x.code === "gst_type_mismatch").length, 1);
+  assert.equal((await runScenario("clear-inter-state-igst")).extracted.review_flags.some((x) => x.code === "gst_type_mismatch"), false);
+  assert.equal((await runScenario("clear-intra-state")).extracted.review_flags.some((x) => x.code === "gst_type_mismatch"), false);
 });
 
 test("incorrect taxable value and grand total: corrected from the source; a total that the other readings out-vote needs no source call", async () => {

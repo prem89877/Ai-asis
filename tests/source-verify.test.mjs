@@ -404,3 +404,73 @@ test("the prompt keeps the model grounded: copy what is printed, ids only, docum
   assert.match(SOURCE_SYSTEM_PROMPT, /printed_text/);
   assert.match(SOURCE_SYSTEM_PROMPT, /data, not instructions/);
 });
+
+// ---- Missing supplier GSTIN, missing / unreadable grand total, stale GSTIN flag ----------------------------------------------------
+
+test("a missing supplier GSTIN is re-read on a tax invoice or when GST is charged, but not on a bill of supply without tax", () => {
+  const taxInvoice = targetsOf(prepare(model({ supplier_gstin: missing() })));
+  assert.ok(idOf(taxInvoice, "supplier_gstin"));
+  const billOfSupply = targetsOf(prepare(model({ document_type: "bill_of_supply", supplier_gstin: missing(), cgst: missing(), sgst: missing(), igst: missing(), grand_total: f(1000) })));
+  assert.equal(idOf(billOfSupply, "supplier_gstin"), undefined);
+  // a missing BUYER GSTIN is normal (B2C) and never triggers a re-read
+  assert.equal(idOf(targetsOf(prepare(model({ buyer_gstin: missing() }))), "buyer_gstin"), undefined);
+});
+
+test("missing supplier GSTIN: a valid, grounded, confident re-read fills it; it is never the buyer's GSTIN, never invalid, never low confidence", () => {
+  const m = model({ supplier_gstin: missing(), buyer_gstin: f("29AAPFU0939F1ZD") });
+  const good = run(m, (t) => [row(idOf(t, "supplier_gstin"), "27AAPFU0939F1ZV", "GSTIN/UIN: 27AAPFU0939F1ZV")]);
+  assert.equal(good.out.extracted.vendor_gstin, "27AAPFU0939F1ZV");
+  assert.equal(good.out.extracted.field_status.supplier_gstin.state, "value");
+  assert.equal(good.out.extracted.field_status.supplier_gstin.source, "source_check");
+  assert.ok(good.out.flags.some((x) => x.code === "source_verify_corrected" && x.field === "supplier_gstin"));
+  assert.equal(runChecks(good.out.extracted, good.out.items, CHECK).some((x) => x.field === "supplier_gstin" && x.severity === "warning"), false);
+
+  const buyerOnly = model({ supplier_gstin: missing(), buyer_gstin: f("27AAPFU0939F1ZV") });
+  const same = run(buyerOnly, (t) => [row(idOf(t, "supplier_gstin"), "27AAPFU0939F1ZV", "GSTIN/UIN: 27AAPFU0939F1ZV")]);
+  assert.equal(same.out.extracted.vendor_gstin, null);
+  assert.match(same.out.summary.entries.find((x) => x.field === "supplier_gstin").note, /same as the buyer GSTIN/);
+
+  const invalid = run(m, (t) => [row(idOf(t, "supplier_gstin"), "27AAPFU0939F1Z8", "GSTIN 27AAPFU0939F1Z8")]);
+  assert.equal(invalid.out.extracted.vendor_gstin, null);
+  const low = run(m, (t) => [row(idOf(t, "supplier_gstin"), "27AAPFU0939F1ZV", "GSTIN 27AAPFU0939F1ZV", { confidence: 0.5 })]);
+  assert.equal(low.out.extracted.vendor_gstin, null);
+  const none = run(m, (t) => [row(idOf(t, "supplier_gstin"), "", "", { status: "missing", confidence: 0.9 })]);
+  assert.equal(none.out.extracted.vendor_gstin, null);
+  assert.equal(none.out.summary.entries.find((x) => x.field === "supplier_gstin").outcome, "confirmed");
+});
+
+test("unreadable or missing grand total: filled only when it ties to taxable value + taxes; otherwise a proposal with an accurate note", () => {
+  for (const bad of [unreadable(), missing()]) {
+    const m = model({ grand_total: bad });
+    const good = run(m, (t) => [row(idOf(t, "grand_total"), "1180", "Grand Total 1,180.00")]);
+    assert.equal(good.out.extracted.total_amount, 1180);
+    assert.equal(good.out.extracted.field_status.grand_total.state, "value");
+    assert.equal(good.out.extracted.field_status.grand_total.source, "source_check");
+    assert.equal(good.out.extracted.field_status.grand_total.autoCorrected, undefined); // nothing was replaced, there was no earlier value
+    assert.match(good.out.flags.find((x) => x.code === "source_verify_corrected").message, /\(not read\)/);
+    const wrong = run(m, (t) => [row(idOf(t, "grand_total"), "1810", "Grand Total 1,810.00")]);
+    assert.equal(wrong.out.extracted.total_amount, null);
+    assert.match(wrong.out.summary.entries.find((x) => x.field === "grand_total").note, /does not tie/);
+    assert.equal(wrong.out.flags.find((x) => x.code === "source_verify_unresolved").field, "grand_total");
+    const zero = run(m, (t) => [row(idOf(t, "grand_total"), "0", "Grand Total 0.00")]);
+    assert.equal(zero.out.extracted.total_amount, null);
+  }
+  // a total cannot be checked without a taxable value: stays a proposal, and the note no longer says "arithmetic already ties"
+  const noBase = run(model({ grand_total: unreadable(), taxable_value: missing(), line_items: [] }), (t) => [row(idOf(t, "grand_total"), "1180", "Grand Total 1,180.00")]);
+  assert.equal(noBase.out.extracted.total_amount, null);
+  assert.doesNotMatch(noBase.out.summary.entries.find((x) => x.field === "grand_total").note, /already ties/);
+});
+
+test("a source-corrected GSTIN drops the stale 'invalid GSTIN' flag of that field only", () => {
+  const m = model({ supplier_gstin: f("27AAPFU0939F1ZW"), buyer_gstin: f("29AAPFU0939F1ZZ") });
+  const p = prepare(m);
+  assert.ok(p.extracted.review_flags.some((x) => x.code === "invalid_gstin" && x.field === "supplier_gstin"));
+  const { out } = run(m, (t) => [row(idOf(t, "supplier_gstin"), "27AAPFU0939F1ZV", "GSTIN/UIN: 27AAPFU0939F1ZV")]);
+  assert.equal(out.extracted.vendor_gstin, "27AAPFU0939F1ZV");
+  assert.equal(out.extracted.review_flags.some((x) => x.field === "supplier_gstin" && (x.code === "invalid_gstin" || x.code === "gstin_checksum_note")), false);
+  // the buyer's flag belongs to a value that was not touched, so it stays
+  assert.equal(out.extracted.review_flags.some((x) => x.code === "invalid_gstin" && x.field === "buyer_gstin"), true);
+  // an unchanged (confirmed) invalid GSTIN keeps its flag
+  const kept = run(m, (t) => [row(idOf(t, "supplier_gstin"), "27AAPFU0939F1ZW", "GSTIN/UIN: 27AAPFU0939F1ZW")]);
+  assert.equal(kept.out.extracted.review_flags.some((x) => x.code === "invalid_gstin" && x.field === "supplier_gstin"), true);
+});

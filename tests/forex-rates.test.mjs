@@ -112,7 +112,7 @@ const OPTS = { lowConfidence: 0.8, tolerancePaise: 100 };
 const line1 = (o = {}) => item({ description: f("Machine"), quantity: f(5), unit_price: f(1200), discount: f(100), taxable_value: f(492650), gst_rate: f(18), tax_amount: f(88677), line_total: f(581327), ...o });
 const line2 = (o = {}) => item({ description: f("Spares"), quantity: f(2), unit_price: f(300), discount: missing(), taxable_value: f(50100), gst_rate: f(18), tax_amount: f(9018), line_total: f(59118), ...o });
 const usd = (over = {}) => model({
-  currency: f("USD"), buyer_gstin: missing(),
+  currency: f("USD"), buyer_gstin: missing(), place_of_supply: f("United States"), // an export invoice prints a place of supply outside India (not a Maharashtra state code), so the state rule does not apply
   taxable_value: f(542750), cgst: missing(), sgst: missing(), igst: f(97695), cess: f(5427.5), grand_total: f(645872.5),
   line_items: [line1(), line2()], ...over,
 });
