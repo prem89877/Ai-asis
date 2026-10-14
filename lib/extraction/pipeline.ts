@@ -9,6 +9,8 @@ import { estimateCostUsd } from "./gemini.ts";
 import type { GeminiCaller, GeminiCallResult } from "./gemini.ts";
 import { getCheckConfig } from "./config.ts";
 import type { CheckConfig, GeminiConfig } from "./config.ts";
+import { checkSupplierOnPortal } from "./gst-portal.ts";
+import type { GstLookup } from "./gst-portal.ts";
 import { reconcileLineItems } from "./line-fix.ts";
 import { nameKey, normalizeExtraction } from "./normalize.ts";
 import { preflight } from "./preflight.ts";
@@ -79,6 +81,7 @@ export interface PipelineDeps {
   gemini: GeminiCaller;
   geminiConfig: GeminiConfig;
   checkConfig?: CheckConfig;
+  gstPortal?: GstLookup | null; // live GST portal lookup of the supplier GSTIN (gst-portal.ts); null / absent = not configured
   maxPdfPages: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -460,6 +463,21 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
     if (gstVerdict.patch.round_off_amount !== undefined) {
       extracted.round_off_amount = Math.round(gstVerdict.patch.round_off_amount * 100) / 100;
       extracted.field_status.round_off_amount = { state: "value", confidence: 1, source: "computed" };
+    }
+
+    // GST portal check of the supplier GSTIN against the invoice date (gst-portal.ts): active / cancelled, registered before the
+    // invoice date, name match. Adds flags only. Skipped when it is not configured or when too little run time is left.
+    if (deps.gstPortal) {
+      const left = cfg.deadlineMs - (now() - started) - VERIFY_SAVE_MARGIN_MS;
+      if (left >= 2_000) {
+        try {
+          const portal = await checkSupplierOnPortal(deps.gstPortal, extracted, { timeoutMs: Math.min(8_000, left) });
+          flags.push(...portal.flags);
+          if (portal.summary) extracted.validation_summary = { ...(extracted.validation_summary ?? {}), gst_portal: portal.summary };
+        } catch {
+          log("extraction_gst_portal_error", { jobId: ctx.jobId });
+        }
+      }
     }
 
     // Final verification gate: three layers (rules, consensus of every reading, independent evidence) over the whole content.
