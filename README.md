@@ -49,3 +49,6 @@ Unified GST checks (mixed IGST + CGST/SGST, TCS/TDS, pre-tax charges, round-off,
 
 ## Source-grounded second verification
 Suspicious values only are re-read from the original file, judged in code, corrected only with proof, audited in `validation_summary.source_verification`. See `docs/SOURCE_VERIFICATION.md`. New optional variable: `EXTRACTION_SOURCE_VERIFY` (default on).
+
+## Accuracy evaluation and final integration check
+End-to-end tests of the dynamic prompt, structured extraction and source verification working together, an offline baseline-vs-updated evaluation (`npm run eval:pipeline`) and a live mode for measuring real accuracy, latency and cost. Results, limits and Vercel deployment steps: `docs/ACCURACY_EVALUATION.md`. No new environment variables.

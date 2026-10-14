@@ -9,7 +9,8 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test \"tests/**/*.test.mjs\"",
-    "eval:extraction": "node --experimental-strip-types scripts/eval-extraction.mjs"
+    "eval:extraction": "node --experimental-strip-types scripts/eval-extraction.mjs",
+    "eval:pipeline": "node --experimental-strip-types scripts/eval-pipeline.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
