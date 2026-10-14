@@ -52,8 +52,9 @@ construction. The meaningful results are the zeros: no value was made wrong, and
 invoice that was sent to review. The extra provider call happens only for invoices with suspicious values (0.73 extra calls per invoice on this
 dataset, which is mostly suspicious by design; real clean invoices cost no extra call). Real latency and dollar cost need the live mode.
 
-The 9 fields still wrong in `updated`, all flagged: supplier GSTIN missing (not re-read), invoice number missing (proposal only), unreadable
-total (proposal only), and six cases where the scripted re-read was unreadable / ambiguous / wrong / malformed / failed.
+The 9 fields still wrong in `updated`, all flagged (measured before the later fixes: a missing supplier GSTIN and an unreadable total are now
+re-read and filled when the proof holds): supplier GSTIN missing, invoice number missing (proposal only), unreadable
+total, and six cases where the scripted re-read was unreadable / ambiguous / wrong / malformed / failed.
 
 ## What the tests cover (`tests/e2e-accuracy.test.mjs`)
 Full workflow (upload bytes, dynamic prompt, parse, validate, suspicious fields, source re-read, correction, saved record, review-form column
@@ -65,16 +66,21 @@ a throwing prompt engine. Regression and safety: defaults and off-switches, `.en
 `NEXT_PUBLIC_` variable, no server secret in any `"use client"` file, no `process.env` in the new modules, logs and usage records contain no
 key / invoice number / GSTIN / name / amount. The existing 596 tests (routes, auth guards, upload, billing, export, Tally, sync) still pass.
 
-## Findings (not changed: outside Parts 1 to 3 or a deliberate design choice)
-1. **IGST on a same-state invoice is saved as `completed` with no flag.** The rule `gst_type_mismatch` lives in `lib/review/gst.ts` and runs on
-   the review screen when the record is evaluated, not in the extraction pipeline. The test records this behaviour. This predates Parts 1 to 3.
-2. **A corrected GSTIN still goes to review.** The earlier `invalid_gstin` warning is not removed after Part 3 corrects the value, and its text
-   suggests the GSTIN that is now saved. Conservative, but confusing. Removing it is a policy decision.
-3. A **missing supplier GSTIN is not re-read** (only required fields are). It is flagged `missing_field` (warning) for a person.
-4. An **unreadable or missing grand total is never filled** by the source re-read, only proposed. The note text then says "arithmetic already
-   ties", which is misleading for a null total (cosmetic).
-5. Tally: comments in `lib/export/profiles.ts` and `lib/tally/build.ts` say the route is off unless `TALLY_EXPORT_ENABLED=true`, but the route
-   and `.env.example` make it **on by default** (off only with `false`). Confirm which is intended.
+## Findings (items 1 to 5 were fixed in a later change; item 6 is still open)
+1. **IGST on a same-state invoice (fixed).** The extraction pipeline now runs the `gst_type_mismatch` rule of `lib/review/gst.ts` (supplier state
+   vs place of supply) after the source check. Such an invoice is saved as `needs_review` with a warning, not as `completed`. The value is kept
+   as printed. Only this one rule was taken over; the other `gstChecks` rules still run at review time.
+2. **A corrected GSTIN still went to review (fixed).** When the source re-read replaces a GSTIN with one that passes layout, check digit and
+   state code, the old `invalid_gstin` / `gstin_checksum_note` flag of that field is removed. A confirmed (unchanged) invalid GSTIN keeps its flag,
+   and the flag of the other party's GSTIN is never touched.
+3. **A missing supplier GSTIN is now re-read (fixed).** Only when the document is a tax invoice or GST is charged (a bill of supply or an
+   unregistered supplier costs no extra call). The re-read value is accepted only with the usual proof (valid GSTIN, grounded quote, confidence
+   of 0.9 or more, no rival reading) and never when it equals the buyer's GSTIN. Otherwise the `missing_field` warning stays.
+4. **A missing or unreadable grand total is now filled by the source re-read (fixed)**, but only when the re-read total ties to taxable value plus
+   taxes (the engine's own total check passes with it). Otherwise it stays a proposal, and the note no longer says "arithmetic already ties".
+5. **Tally default.** The route, `/api/integrations`, `.env.example`, `docs/PHASE6_PART1_SETUP.md` and `docs/DEPLOYMENT.md` all say the Tally export
+   is **on by default** (off only with `TALLY_EXPORT_ENABLED=false`), and a test covers it. The comments in `lib/export/profiles.ts`,
+   `lib/tally/build.ts` and `components/integrations/TallyPanel.tsx` were wrong and are corrected.
 6. `mediaResolution: HIGH` for the source re-read is untested against live Gemini (Part 3 already noted this).
 
 ## Environment variables
