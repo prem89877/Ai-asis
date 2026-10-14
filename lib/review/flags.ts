@@ -2,6 +2,8 @@
 // Extraction-time flags are deliberately not carried over: they described the old values.
 // Flags only point at problems. Values are never changed here.
 import { runChecks } from "../extraction/checks.ts";
+import { lineFixFlag } from "../extraction/line-fix.ts";
+import type { FixField } from "../extraction/line-fix.ts";
 import { GSTIN_AUTO_CORRECTED_LABEL, suggestGstinFixes, suggestionText } from "../extraction/gstin.ts";
 import { checkGstin, gstinChecksumFlagText, GSTIN_PRINT_ERROR_CONFIDENCE } from "../extraction/normalize.ts";
 import type { FieldMeta, ModelOutput, ReviewFlag, StoredExtracted, StoredItem } from "../extraction/types.ts";
@@ -105,6 +107,15 @@ export function computeReviewFlags(h: HeaderValues, fieldStatus: Record<string, 
       }
     }
   }
+
+  // Line values that the maths corrected at extraction time: keep the audit note while the value is still the corrected one.
+  const FIXED: [string, FixField][] = [["quantity", "quantity"], ["unit_price", "unit_price"], ["taxable_value", "taxable_amount"]];
+  items.forEach((it, i) => {
+    for (const [statusKey, field] of FIXED) {
+      const ac = it.field_status[statusKey]?.autoCorrected;
+      if (ac && it[field] !== null && Number(ac.to) === it[field]) flags.push(lineFixFlag(i + 1, field, Number(ac.from), Number(ac.to)));
+    }
+  });
 
   flags.push(...runChecks(doc, items, opts));
   flags.push(...gstChecks(doc, items, { tolerancePaise: opts.tolerancePaise }));
