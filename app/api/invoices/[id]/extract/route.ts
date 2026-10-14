@@ -7,6 +7,7 @@ import { UUID_RE } from "@/lib/invoices/validation";
 import { getCheckConfig, getGeminiConfig, getLimits } from "@/lib/extraction/config";
 import { userMessage } from "@/lib/extraction/errors";
 import { callGemini } from "@/lib/extraction/gemini";
+import { createGstPortalLookup } from "@/lib/extraction/gst-portal";
 import { runExtraction } from "@/lib/extraction/pipeline";
 import { createSupabaseFiles, createSupabaseStore } from "@/lib/extraction/store";
 
@@ -82,6 +83,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
         gemini: callGemini,
         geminiConfig,
         checkConfig: getCheckConfig(),
+        gstPortal: createGstPortalLookup(),
         maxPdfPages: limits.maxPdfPages,
       },
       {
