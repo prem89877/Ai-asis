@@ -5,7 +5,7 @@
 // REQUESTDATA > TALLYMESSAGE > VOUCHER with ledger entries), written from the published format. It has NOT been imported
 // into Tally Prime / Tally.ERP 9 in this project. The unit tests check that the output is well-formed XML and that every
 // voucher balances to zero; they do not prove that Tally accepts it. Test with a copy of a company in YOUR Tally version
-// before trusting it, and see docs/PHASE6_PART1_SETUP.md. The route that serves it is OFF unless TALLY_EXPORT_ENABLED=true.
+// before trusting it, and see docs/PHASE6_PART1_SETUP.md. The route that serves it is ON by default; it is switched off only with TALLY_EXPORT_ENABLED=false.
 //
 // What it does NOT do: it never connects to Tally, never posts anything, never creates ledgers or stock items, and does
 // not carry GST registration details or bill-wise allocations. Party and tax ledgers must already exist in Tally under
