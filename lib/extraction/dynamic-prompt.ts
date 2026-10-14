@@ -24,7 +24,12 @@ export interface DocumentSignals {
   previousFailure?: ExtractionErrorCode | null; // why the previous attempt of this run failed
 }
 
+// Which reading the section is for. The same engine serves every reading of the pipeline (one prompt system, not several).
+// Blind readings (audit, key figures, parties) get text built from file properties only: they never see another reading.
+export type PromptPurpose = "first" | "verify" | "audit" | "keyfigures" | "parties";
+
 export interface DynamicPromptOptions {
+  purpose?: PromptPurpose; // default "first"
   maxWords?: number; // soft target for the dynamic section (default 300). Required blocks are never dropped.
   maxOcrChars?: number; // OCR text sent to the model (default 12000)
 }
@@ -180,7 +185,34 @@ function regimeSentence(r: TaxRegime): string {
   }
 }
 
-function buildBlocks(sig: DocumentSignals, profile: InvoiceProfile, ocrIncluded: boolean): Block[] {
+// Blocks only name fields that exist in the schema of the reading they are sent with (a test enforces it).
+const ALL: PromptPurpose[] = ["first", "verify", "audit", "keyfigures", "parties"];
+const ITEMS: PromptPurpose[] = ["first", "verify", "audit"]; // readings that return the item table
+const TOTALS: PromptPurpose[] = ["first", "verify", "audit", "keyfigures"]; // readings that return the totals block
+const PARTY: PromptPurpose[] = ["first", "verify", "audit", "parties"]; // readings that return GSTINs
+const APPLIES: Record<string, PromptPurpose[]> = {
+  retry: ["first"],
+  partial_page: TOTALS,
+  pdf_multipage: ALL,
+  kind: ITEMS,
+  conflicting_totals: TOTALS,
+  conflicting_invoice_numbers: ITEMS,
+  gst_core: ITEMS,
+  totals_core: ["keyfigures"],
+  party_blocks: ["parties"],
+  e_invoice: TOTALS,
+  bottom_summary: TOTALS,
+  foreign_currency: ITEMS,
+  discount_column: ITEMS,
+  continuation_rows: ITEMS,
+  cess: TOTALS,
+  reverse_charge: TOTALS,
+  many_gstins: PARTY,
+  suspect_gstin: PARTY,
+};
+const appliesTo = (id: string, purpose: PromptPurpose) => (APPLIES[id.startsWith("kind_") ? "kind" : id] ?? ALL).includes(purpose);
+
+function buildBlocks(sig: DocumentSignals, profile: InvoiceProfile, ocrIncluded: boolean, purpose: PromptPurpose): Block[] {
   const b: Block[] = [];
   const isPdf = sig.mime === "application/pdf";
   const pages = safeInt(sig.pages, 1, 100);
@@ -205,7 +237,13 @@ function buildBlocks(sig: DocumentSignals, profile: InvoiceProfile, ocrIncluded:
     b.push({ id: "partial_page", priority: 10, text: 'This file is one page of a multi-page invoice. Items may continue on another page and the totals box may be absent. Use "missing" for an invoice-level figure that is not on this page; never take a page subtotal as the grand total.' });
   } else if (isPdf && (pages === null || (pages ?? 1) > 1 || (declared ?? 0) > 1)) {
     const count = pages && pages > 1 ? `has ${pages} pages` : "may have several pages";
-    b.push({ id: "pdf_multipage", priority: 12, text: `This PDF ${count}. Read every page before answering. The item table may continue across pages: a repeated column header or a page subtotal is not an item. Return each real row once, in page order. Take invoice-level figures from the final totals box.` });
+    const tail =
+      purpose === "keyfigures"
+        ? "Invoice-level figures are in the final totals box, never in a page subtotal."
+        : purpose === "parties"
+          ? "A GSTIN can be printed in the header, a party block, the footer or the e-invoice block."
+          : "The item table may continue across pages: a repeated column header or a page subtotal is not an item. Return each real row once, in page order. Take invoice-level figures from the final totals box.";
+    b.push({ id: "pdf_multipage", priority: 12, text: `This PDF ${count}. Read every page before answering. ${tail}` });
   }
   if (!isPdf) {
     b.push({ id: "image", priority: 14, text: 'This file is an image (scan or phone photo). Allow for skew, shadows, folds and glare. Do not read a value that touches a cut-off edge: use "unreadable". Keep each number tied to its own row and column.' });
@@ -237,6 +275,14 @@ function buildBlocks(sig: DocumentSignals, profile: InvoiceProfile, ocrIncluded:
     text: `GST layout: the supplier (issuer) block, the bill-to block and any ship-to block are different parties; assign each GSTIN by its block. ${regimeSentence(profile.regime)} An HSN/SAC or tax-rate summary under the items repeats tax per rate: it is not a list of line items. Keep taxable_value, each tax head, round-off and grand_total as separate printed figures.`,
   });
 
+  b.push({
+    id: "totals_core", priority: 25,
+    text: "Keep taxable_value, each tax head, round_off_amount and grand_total as separate printed figures from the invoice totals box. An HSN/SAC or tax-rate summary repeats tax per rate and is not the invoice total.",
+  });
+  b.push({
+    id: "party_blocks", priority: 25,
+    text: "The supplier (issuer) block, the bill-to block and any ship-to block are different parties. Record each GSTIN with the role of the block it sits in, and never cut a PAN out of a GSTIN.",
+  });
   if (profile.eInvoice || profile.ewayBill) {
     b.push({ id: "e_invoice", priority: 30, text: 'An e-invoice or e-way bill block is present: read irn, ack_no and eway_bill_no only from it, character by character. irn must be exactly 64 characters (0-9, a-f), eway_bill_no 12 digits; otherwise "unreadable".' });
   }
@@ -279,6 +325,8 @@ function buildBlocks(sig: DocumentSignals, profile: InvoiceProfile, ocrIncluded:
 export interface DynamicPrompt {
   instructions: string; // the dynamic section only (add it to the fixed system prompt with composeSystemPrompt)
   userPrompt: string; // USER_PROMPT, plus the <ocr_text> block when OCR text was given
+  ocrBlock: string | null; // the <ocr_text> block alone (for readings that keep their own user prompt, see composeUserPrompt)
+  purpose: PromptPurpose;
   features: string[]; // ids of the blocks used (safe to log: no document content)
   dropped: string[]; // ids of optional blocks left out to respect the word target
   wordCount: number;
@@ -305,8 +353,12 @@ export function buildDynamicPrompt(signals: DocumentSignals, options: DynamicPro
   const maxWords = options.maxWords ?? DEFAULT_MAX_WORDS;
   const maxOcr = options.maxOcrChars ?? DEFAULT_MAX_OCR_CHARS;
   const hasOcr = typeof signals.ocrText === "string" && signals.ocrText.trim() !== "";
+  const purpose = options.purpose ?? "first";
   const profile = analyzeInvoiceText(signals.ocrText);
-  const blocks = buildBlocks(signals, profile, hasOcr).sort((a, b) => a.priority - b.priority);
+  const blocks = buildBlocks(signals, profile, hasOcr, purpose)
+    .filter((bl) => appliesTo(bl.id, purpose))
+    .sort((a, b) => a.priority - b.priority);
+  const ocr = hasOcr ? ocrBlock(signals.ocrText as string, maxOcr) : null;
 
   // Required blocks first, then optional blocks in priority order while the word target allows.
   const keep = new Set<string>();
@@ -332,7 +384,9 @@ export function buildDynamicPrompt(signals: DocumentSignals, options: DynamicPro
   const instructions = chosen.map((bl) => bl.text).join("\n");
   return {
     instructions,
-    userPrompt: hasOcr ? `${USER_PROMPT}\n${ocrBlock(signals.ocrText as string, maxOcr)}` : USER_PROMPT,
+    userPrompt: ocr ? `${USER_PROMPT}\n${ocr}` : USER_PROMPT,
+    ocrBlock: ocr,
+    purpose,
     features: chosen.map((bl) => bl.id),
     dropped,
     wordCount: words(instructions),
@@ -345,4 +399,9 @@ export function composeSystemPrompt(base: string, dynamic: Pick<DynamicPrompt, "
   const tail = "Return JSON only.";
   const trimmed = base.replace(/\s*Return JSON only\.\s*$/, "");
   return `${trimmed}\n\n${dynamic.instructions}\n${tail}`;
+}
+
+// Readings that have their own user prompt (second reading, audit, key figures, parties) keep it; the OCR block is appended when there is one.
+export function composeUserPrompt(baseUser: string, dynamic: Pick<DynamicPrompt, "ocrBlock">): string {
+  return dynamic.ocrBlock ? `${baseUser}\n${dynamic.ocrBlock}` : baseUser;
 }

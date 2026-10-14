@@ -16,9 +16,11 @@ import { checkSupplierOnPortal } from "./gst-portal.ts";
 import type { GstLookup } from "./gst-portal.ts";
 import { reconcileLineItems } from "./line-fix.ts";
 import { nameKey, normalizeExtraction } from "./normalize.ts";
+import { dedupeItemRows } from "./item-rows.ts";
+import { parseModelJson } from "./parse-json.ts";
 import { preflight } from "./preflight.ts";
-import { buildDynamicPrompt, composeSystemPrompt } from "./dynamic-prompt.ts";
-import type { DocumentSignals, DynamicPrompt } from "./dynamic-prompt.ts";
+import { buildDynamicPrompt, composeSystemPrompt, composeUserPrompt } from "./dynamic-prompt.ts";
+import type { DocumentSignals, DynamicPrompt, DynamicPromptOptions, PromptPurpose } from "./dynamic-prompt.ts";
 import { AUDIT_SYSTEM_PROMPT, AUDIT_USER_PROMPT, buildVerifyUserPrompt, KEYFIGURES_SYSTEM_PROMPT, KEYFIGURES_USER_PROMPT, PARTIES_SYSTEM_PROMPT, PARTIES_USER_PROMPT, SYSTEM_PROMPT, VERIFY_SYSTEM_PROMPT } from "./prompt.ts";
 import { buildKeyFiguresSchema, buildPartiesSchema, validateKeyFigures, validateModelOutput, validateParties } from "./schema.ts";
 import { auditExtraction, needsAnotherPartiesReading } from "./final-audit.ts";
@@ -89,7 +91,7 @@ export interface PipelineDeps {
   gstPortal?: GstLookup | null; // live GST portal lookup of the supplier GSTIN (gst-portal.ts); null / absent = not configured
   fx?: FxLookup | null; // historical exchange rate of the invoice date for foreign currency invoices (fx-rates.ts); null / absent = off
   maxPdfPages: number;
-  promptBuilder?: (signals: DocumentSignals) => DynamicPrompt; // dynamic-prompt.ts; replaceable in tests. Used only when geminiConfig.dynamicPrompt is on.
+  promptBuilder?: (signals: DocumentSignals, options?: DynamicPromptOptions) => DynamicPrompt; // dynamic-prompt.ts; replaceable in tests. Used only when geminiConfig.dynamicPrompt is on.
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
@@ -120,20 +122,6 @@ const MIN_TIME_FOR_RETRY_MS = 8_000;
 // The second check only starts if this much of the run budget is left, and always leaves a margin for saving.
 const MIN_TIME_FOR_VERIFY_MS = 12_000;
 const VERIFY_SAVE_MARGIN_MS = 4_000;
-
-function stripFence(text: string): string {
-  const t = text.trim();
-  const m = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(t);
-  return m ? m[1] : t;
-}
-
-function parseModelJson(text: string): { ok: true; value: unknown } | { ok: false } {
-  try {
-    return { ok: true, value: JSON.parse(stripFence(text)) };
-  } catch {
-    return { ok: false };
-  }
-}
 
 function supplierCompatible(e: StoredExtracted, c: DuplicateCandidate): boolean {
   if (e.vendor_gstin && c.vendorGstin) return e.vendor_gstin === c.vendorGstin;
@@ -325,6 +313,18 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
         recheckNotes.push({ code: "recheck_unavailable", severity: "info", message: "The second check was skipped because time ran out. Only one reading of the document was used." });
       } else {
         const timeoutMs = Math.max(1_000, Math.min(cfg.timeoutMs, remaining - VERIFY_SAVE_MARGIN_MS));
+        // The same dynamic prompt engine serves every reading (purpose = which one). Blind readings get text built from the file's
+        // properties only. On any engine failure the reading keeps its unchanged fixed prompts.
+        const layerPrompt = (purpose: PromptPurpose, baseSystem: string, baseUser: string): { systemPrompt: string; userPrompt: string } => {
+          if (!cfg.dynamicPrompt) return { systemPrompt: baseSystem, userPrompt: baseUser };
+          try {
+            const dyn = (deps.promptBuilder ?? buildDynamicPrompt)({ mime: ctx.mime, pages: pre.pages, width: pre.width, height: pre.height }, { purpose });
+            return { systemPrompt: composeSystemPrompt(baseSystem, dyn), userPrompt: composeUserPrompt(baseUser, dyn) };
+          } catch {
+            log("extraction_dynamic_prompt_error", { jobId: ctx.jobId, purpose });
+            return { systemPrompt: baseSystem, userPrompt: baseUser };
+          }
+        };
         const call = async (extra: { systemPrompt: string; userPrompt: string; responseSchema?: unknown }): Promise<GeminiCallResult | null> => {
           try {
             return await deps.gemini({ apiKey: cfg.apiKey, model: cfg.model, mime: ctx.mime, data: bytes, timeoutMs, maxOutputTokens: cfg.maxOutputTokens, fetchImpl: deps.fetchImpl, ...extra });
@@ -333,10 +333,10 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
           }
         };
         const [secondRes, auditRes, keyRes, partiesRes] = await Promise.all([
-          wantSecond ? call({ systemPrompt: VERIFY_SYSTEM_PROMPT, userPrompt: buildVerifyUserPrompt(firstReading) }) : Promise.resolve(undefined),
-          wantAudit ? call({ systemPrompt: AUDIT_SYSTEM_PROMPT, userPrompt: AUDIT_USER_PROMPT }) : Promise.resolve(undefined),
-          wantKey ? call({ systemPrompt: KEYFIGURES_SYSTEM_PROMPT, userPrompt: KEYFIGURES_USER_PROMPT, responseSchema: buildKeyFiguresSchema() }) : Promise.resolve(undefined),
-          wantParties ? call({ systemPrompt: PARTIES_SYSTEM_PROMPT, userPrompt: PARTIES_USER_PROMPT, responseSchema: buildPartiesSchema() }) : Promise.resolve(undefined),
+          wantSecond ? call(layerPrompt("verify", VERIFY_SYSTEM_PROMPT, buildVerifyUserPrompt(firstReading))) : Promise.resolve(undefined),
+          wantAudit ? call(layerPrompt("audit", AUDIT_SYSTEM_PROMPT, AUDIT_USER_PROMPT)) : Promise.resolve(undefined),
+          wantKey ? call({ ...layerPrompt("keyfigures", KEYFIGURES_SYSTEM_PROMPT, KEYFIGURES_USER_PROMPT), responseSchema: buildKeyFiguresSchema() }) : Promise.resolve(undefined),
+          wantParties ? call({ ...layerPrompt("parties", PARTIES_SYSTEM_PROMPT, PARTIES_USER_PROMPT), responseSchema: buildPartiesSchema() }) : Promise.resolve(undefined),
         ]);
 
         // One blind parties reading (supplier / buyer, GSTIN, PAN, state, every printed GSTIN): parse, record usage, keep it if usable.
@@ -434,7 +434,7 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
           if (left < MIN_TIME_FOR_CALL_MS + VERIFY_SAVE_MARGIN_MS) break;
           retries -= 1;
           const before = parties.length;
-          const res = await deps.gemini({ apiKey: cfg.apiKey, model: cfg.model, mime: ctx.mime, data: bytes, timeoutMs: Math.max(1_000, Math.min(cfg.timeoutMs, left - VERIFY_SAVE_MARGIN_MS)), maxOutputTokens: cfg.maxOutputTokens, fetchImpl: deps.fetchImpl, systemPrompt: PARTIES_SYSTEM_PROMPT, userPrompt: PARTIES_USER_PROMPT, responseSchema: buildPartiesSchema() }).catch(() => null);
+          const res = await deps.gemini({ apiKey: cfg.apiKey, model: cfg.model, mime: ctx.mime, data: bytes, timeoutMs: Math.max(1_000, Math.min(cfg.timeoutMs, left - VERIFY_SAVE_MARGIN_MS)), maxOutputTokens: cfg.maxOutputTokens, fetchImpl: deps.fetchImpl, ...layerPrompt("parties", PARTIES_SYSTEM_PROMPT, PARTIES_USER_PROMPT), responseSchema: buildPartiesSchema() }).catch(() => null);
           if (!(await takeParties(res, "parties_retry")) || parties.length === before) break;
           layerCount += 1;
           pr = resolveParties(readingsForParties(firstReading, extraFull), parties, model);
@@ -467,8 +467,22 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
       }
     }
 
-    const normalized = normalizeExtraction(model, { model: cfg.model, now: new Date(now()), agreed });
+    // Item rows read twice (multi-page overlap) are removed only when the invoice's taxable total proves it (item-rows.ts); the
+    // reading as received stays in raw_extraction. Genuine repeated items are never removed.
+    let storedModel: ModelOutput = model;
+    const rowFlags: ReviewFlag[] = [];
+    if (checkCfg.dedupeRows !== false) {
+      try {
+        const d = dedupeItemRows(model, { tolerancePaise: checkCfg.tolerancePaise });
+        storedModel = d.model;
+        rowFlags.push(...d.flags);
+      } catch {
+        log("extraction_dedupe_error", { jobId: ctx.jobId });
+      }
+    }
+    const normalized = normalizeExtraction(storedModel, { model: cfg.model, now: new Date(now()), agreed });
     const extracted = normalized.extracted;
+    if (storedModel !== model) extracted.raw_extraction = model;
     let items = normalized.items;
 
     // Line-item maths reconciliation (line-fix.ts): quantity x unit price (less discount) x rate = taxable value. A misread digit
@@ -502,7 +516,7 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
         }
       }
     }
-    const flags: ReviewFlag[] = [...extracted.review_flags, ...runChecks(extracted, items, checkCfg), ...recheckNotes, ...lineFixFlags, ...forexFlags];
+    const flags: ReviewFlag[] = [...extracted.review_flags, ...runChecks(extracted, items, checkCfg), ...recheckNotes, ...rowFlags, ...lineFixFlags, ...forexFlags];
 
     // GST validation engine verdict: saved with the invoice. A difference of up to INR 2.00 between the calculated and the
     // printed grand total is recorded as round_off_amount (source "computed"), so the original figures are never changed.
@@ -531,7 +545,7 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
     // Final verification gate: three layers (rules, consensus of every reading, independent evidence) over the whole content.
     {
       const audit = auditExtraction({
-        extracted, items, merged: model, readings: readingsForParties(firstReading, extraFull), parties, verdicts,
+        extracted, items, merged: storedModel, readings: readingsForParties(firstReading, extraFull), parties, verdicts,
         totalStatus: verdict && verdict.status !== "no_value" ? verdict.status : null, flags, now: new Date(now()),
       });
       flags.push(...audit.flags);
