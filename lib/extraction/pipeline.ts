@@ -28,6 +28,7 @@ import { resolveParties } from "./party-check.ts";
 import type { GstinVerdict } from "./party-check.ts";
 import { applySourceReading, buildSourceSchema, buildSourceUserPrompt, detectSuspicious, SOURCE_SYSTEM_PROMPT, unavailableSummary, validateSourceReading } from "./source-verify.ts";
 import type { SourceVerifySummary } from "./source-verify.ts";
+import { gstChecks } from "../review/gst.ts";
 import { resolveGrandTotal } from "./total-check.ts";
 import type { GrandTotalVerdict, ReadingTotal } from "./total-check.ts";
 import { reconcile, reconcileMany, recheckFlags } from "./verify.ts";
@@ -583,6 +584,16 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
       }
     }
     const flags: ReviewFlag[] = [...extracted.review_flags, ...runChecks(extracted, items, checkCfg), ...recheckNotes, ...rowFlags, ...lineFixFlags, ...sourceFlags, ...forexFlags];
+
+    // Supplier state vs place of supply (review/gst.ts): IGST on a same-state invoice, or CGST/SGST on an inter-state one. This rule used
+    // to run only when the review screen evaluated the saved record, so such an invoice was saved as "completed" with no flag. Only this
+    // one rule is taken over here (the rest of gstChecks stays a review-time check), and it runs on the values after the source check.
+    // The value itself is never changed: a tax type printed "wrongly" on the document is kept as printed and sent to a person.
+    try {
+      flags.push(...gstChecks(extracted, items, { tolerancePaise: checkCfg.tolerancePaise }).filter((f) => f.code === "gst_type_mismatch"));
+    } catch {
+      log("extraction_gst_type_check_error", { jobId: ctx.jobId });
+    }
 
     // GST validation engine verdict: saved with the invoice. A difference of up to INR 2.00 between the calculated and the
     // printed grand total is recorded as round_off_amount (source "computed"), so the original figures are never changed.

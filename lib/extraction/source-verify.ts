@@ -108,6 +108,12 @@ export interface DetectInput {
   lowConfidence: number;
 }
 
+// A supplier GSTIN is normally printed on a tax invoice, and always when GST is charged. Only then is a missing one worth a re-read
+// (a bill of supply or an unregistered supplier legitimately has none, so that case costs no extra call).
+function supplierGstinExpected(e: StoredExtracted): boolean {
+  return e.document_type === "tax_invoice" || [e.cgst_amount, e.sgst_amount, e.igst_amount].some((v) => v !== null && v !== 0);
+}
+
 const arithmeticFlags = (flags: ReviewFlag[]) => flags.filter((f) => f.code.startsWith("arithmetic_") && (f.severity === "error" || f.severity === "warning"));
 
 // Cheap, deterministic, no AI. An invoice without suspicious values never causes an extra call.
@@ -141,6 +147,7 @@ export function detectSuspicious(inp: DetectInput): Target[] {
     if (m.state === "unreadable") add("header", key, "the first reading could not read it");
     else if (m.state === "invalid") add("header", key, "the first reading gave a value that failed validation");
     else if (m.state === "missing" && REQUIRED_HEADER.has(key)) add("header", key, "a required field was not found");
+    else if (m.state === "missing" && key === "supplier_gstin" && supplierGstinExpected(e)) add("header", key, "the supplier GSTIN was not found although this is a tax invoice or GST is charged");
     else if ((m.state === "value" || m.state === "zero") && m.confidence < inp.lowConfidence) add("header", key, `low confidence (${m.confidence})`);
     if (m.autoCorrected && HEADER[key].kind === "gstin") add("header", key, "its check digit was repaired automatically");
   }
@@ -422,7 +429,13 @@ export function applySourceReading(inp: ApplyInput): ApplyResult {
       const savedOk = typeof original === "string" && gstinIsValid(normGstin(original));
       if (!gstinIsValid(v)) why = "the re-read GSTIN does not pass layout, check digit and state code, so it is the printed text that may be wrong.";
       else if (savedOk) why = "both the saved and the re-read GSTIN are valid, so the check digit cannot decide.";
-      else proof.push("re-read GSTIN passes layout, check digit and state code; the saved one does not");
+      else {
+        // The other party's GSTIN must never be taken for this one (supplier and buyer are easy to mix up on the re-read).
+        const other = t.field === "supplier_gstin" ? e.buyer_gstin : e.vendor_gstin;
+        if (other && normGstin(other) === v) why = `the re-read GSTIN is the same as the ${t.field === "supplier_gstin" ? "buyer" : "supplier"} GSTIN, so the two parties may have been mixed up.`;
+        else if (original === null) proof.push(`the ${t.label} was not read before; the re-read GSTIN passes layout, check digit and state code`);
+        else proof.push("re-read GSTIN passes layout, check digit and state code; the saved one does not");
+      }
     } else if (t.kind === "date") {
       const v = value as string;
       const savedOk = typeof original === "string" && normalizeIsoDate(original) !== null && original >= GST_START && original <= tomorrow;
@@ -440,14 +453,25 @@ export function applySourceReading(inp: ApplyInput): ApplyResult {
       const isItemField = t.itemPosition !== undefined;
       if (foreignNoRate) why = "foreign currency invoice without a printed exchange rate.";
       else if (isItemField && inp.checkCfg.lineFix === false) why = "automatic correction of line values is switched off (EXTRACTION_LINE_FIX=off).";
-      else {
+      else if (original === null && t.field === "grand_total" && !isItemField) {
+        // The total was missing or unreadable, so there is no saved value for the arithmetic to disagree with. The re-read total is
+        // accepted only when it ties to the taxable value plus taxes of the invoice (the engine's own total check passes with it).
+        const trialE = clone(e);
+        const trialItems = clone(items);
+        setValue(trialE, trialItems, t, v, r.confidence, null);
+        const check = validateInvoice({ extracted: trialE, items: trialItems }, { tolerancePaise: tol }).summary.total_check;
+        if (v === 0) why = "the re-read grand total is zero.";
+        else if (check === "passed") proof.push("the re-read grand total ties to the taxable value plus taxes (invoice arithmetic passes)");
+        else if (check === "failed") why = "the re-read grand total does not tie to the taxable value plus taxes of the invoice.";
+        else why = "the taxable value and taxes needed to check the re-read grand total are not available.";
+      } else {
         const before = problems(e, items, tol);
         const trialE = clone(e);
         const trialItems = clone(items);
         setValue(trialE, trialItems, t, v, r.confidence, null);
         const after = problems(trialE, trialItems, tol);
         const plausible = original === null || (typeof original === "number" && ocrPlausible(original, v));
-        if (before === 0) why = "the invoice arithmetic already ties, so there is nothing to prove the change.";
+        if (before === 0) why = original === null ? "the value was not read before and the invoice arithmetic has nothing to compare it with, so it is proposed for a person to confirm." : "the invoice arithmetic already ties, so there is nothing to prove the change.";
         else if (after >= before) why = "the re-read value does not make the invoice arithmetic better.";
         else if (after > 0 && !plausible) why = "the re-read value is not a believable misread of the saved one and the arithmetic still fails.";
         else proof.push(`invoice arithmetic improves (${before} problem(s) before, ${after} after)`);
@@ -456,6 +480,11 @@ export function applySourceReading(inp: ApplyInput): ApplyResult {
     if (proof.length === 0) { unresolved(why); continue; }
 
     setValue(e, items, t, value, r.confidence, original);
+    // The earlier "invalid GSTIN" / "check digit" flag described the value that was just replaced by a GSTIN that passes layout, check
+    // digit and state code. Keeping it would send a verified invoice to review (and its text may even suggest the value now saved).
+    if (t.kind === "gstin" && checkGstin(normGstin(String(value))).ok) {
+      e.review_flags = e.review_flags.filter((f) => !(f.field === t.field && (f.code === "invalid_gstin" || f.code === "gstin_checksum_note")));
+    }
     entries.push({ ...base, outcome: "corrected", applied: true, proof, note: `Corrected from the original document (page ${r.page || "?"}).` });
     flags.push({
       code: "source_verify_corrected", severity: "info", field: t.field, ...(t.itemPosition ? { itemPosition: t.itemPosition } : {}),
