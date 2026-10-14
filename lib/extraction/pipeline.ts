@@ -17,7 +17,9 @@ import type { GstLookup } from "./gst-portal.ts";
 import { reconcileLineItems } from "./line-fix.ts";
 import { nameKey, normalizeExtraction } from "./normalize.ts";
 import { preflight } from "./preflight.ts";
-import { AUDIT_SYSTEM_PROMPT, AUDIT_USER_PROMPT, buildVerifyUserPrompt, KEYFIGURES_SYSTEM_PROMPT, KEYFIGURES_USER_PROMPT, PARTIES_SYSTEM_PROMPT, PARTIES_USER_PROMPT, VERIFY_SYSTEM_PROMPT } from "./prompt.ts";
+import { buildDynamicPrompt, composeSystemPrompt } from "./dynamic-prompt.ts";
+import type { DocumentSignals, DynamicPrompt } from "./dynamic-prompt.ts";
+import { AUDIT_SYSTEM_PROMPT, AUDIT_USER_PROMPT, buildVerifyUserPrompt, KEYFIGURES_SYSTEM_PROMPT, KEYFIGURES_USER_PROMPT, PARTIES_SYSTEM_PROMPT, PARTIES_USER_PROMPT, SYSTEM_PROMPT, VERIFY_SYSTEM_PROMPT } from "./prompt.ts";
 import { buildKeyFiguresSchema, buildPartiesSchema, validateKeyFigures, validateModelOutput, validateParties } from "./schema.ts";
 import { auditExtraction, needsAnotherPartiesReading } from "./final-audit.ts";
 import { resolveParties } from "./party-check.ts";
@@ -87,6 +89,7 @@ export interface PipelineDeps {
   gstPortal?: GstLookup | null; // live GST portal lookup of the supplier GSTIN (gst-portal.ts); null / absent = not configured
   fx?: FxLookup | null; // historical exchange rate of the invoice date for foreign currency invoices (fx-rates.ts); null / absent = off
   maxPdfPages: number;
+  promptBuilder?: (signals: DocumentSignals) => DynamicPrompt; // dynamic-prompt.ts; replaceable in tests. Used only when geminiConfig.dynamicPrompt is on.
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
@@ -235,6 +238,25 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
       if (remaining < MIN_TIME_FOR_CALL_MS) break;
       attempts += 1;
 
+      // First reading only. The fixed system prompt stays; a short invoice-specific section is added to it. If the engine fails
+      // for any reason the run continues with the unchanged static prompts (the model never sees a half-built prompt).
+      let promptOverride: { systemPrompt: string; userPrompt: string } | null = null;
+      if (cfg.dynamicPrompt) {
+        try {
+          const dyn = (deps.promptBuilder ?? buildDynamicPrompt)({
+            mime: ctx.mime,
+            pages: pre.pages,
+            width: pre.width,
+            height: pre.height,
+            attempt: attempts,
+            previousFailure: attempts > 1 ? lastCode : null,
+          });
+          promptOverride = { systemPrompt: composeSystemPrompt(SYSTEM_PROMPT, dyn), userPrompt: dyn.userPrompt };
+        } catch {
+          log("extraction_dynamic_prompt_error", { jobId: ctx.jobId });
+        }
+      }
+
       const res = await deps.gemini({
         apiKey: cfg.apiKey,
         model: cfg.model,
@@ -243,6 +265,7 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
         timeoutMs: Math.max(1_000, Math.min(cfg.timeoutMs, remaining - 1_000)),
         maxOutputTokens: cfg.maxOutputTokens,
         fetchImpl: deps.fetchImpl,
+        ...(promptOverride ?? {}),
       });
 
       let retryAfterMs: number | undefined;
