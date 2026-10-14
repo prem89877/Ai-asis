@@ -79,6 +79,8 @@ export function warningChips(row: Pick<ReviewRow, "flag_keys" | "flag_codes">): 
   if (has("missing_field:supplier_gstin", "unreadable_field:supplier_gstin", "tax_without_gstin")) out.push({ key: "gstin", label: "Supplier GSTIN missing", tone: "warning" });
   if (has("invalid_gstin")) out.push({ key: "badgstin", label: "GSTIN invalid", tone: "warning" });
   if (has("gstin_unverified", "gstin_conflict", "gstin_roles_swapped")) out.push({ key: "gstinverify", label: "GSTIN not verified", tone: "warning" });
+  if (has("supplier_gstin_cancelled", "supplier_gstin_not_yet_registered", "supplier_gstin_not_found", "supplier_name_mismatch", "composition_charging_tax")) out.push({ key: "vendorfraud", label: "Vendor fraud warning", tone: "error" });
+  if (has("supplier_gstin_inactive", "supplier_gstin_blocked")) out.push({ key: "vendorstatus", label: "Supplier GSTIN not active", tone: "warning" });
   if (has("verification_failed")) out.push({ key: "verifyfail", label: "Check failed", tone: "warning" });
   if (has("possible_duplicate")) out.push({ key: "dup", label: "Possible duplicate", tone: "warning" });
   if (has("arithmetic_total_mismatch", "arithmetic_subtotal_mismatch", "arithmetic_line_mismatch", "gst_type_mismatch", "cgst_sgst_unequal", "item_tax_rate_mismatch", "invoice_tax_rate_mismatch", "tax_type_conflict", "tax_on_bill_of_supply")) {
