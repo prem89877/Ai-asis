@@ -233,7 +233,7 @@ export function ReviewWorkspace({ invoiceId, neighborIds, onNavigate, onClose, o
                 {sortedFlags.length > 0 && (
                   <section aria-labelledby="flags-title">
                     <h3 id="flags-title" className="text-sm font-semibold">Warnings ({sortedFlags.length})</h3>
-                    <p className="mt-0.5 text-xs text-ink-muted">{flags.some((x) => x.code === "gstin_auto_corrected") ? "Only a GSTIN check digit was fixed automatically (you can switch back below). Check each against the original." : "Nothing was changed automatically. Check each against the original."}</p>
+                    <p className="mt-0.5 text-xs text-ink-muted">{flags.some((x) => x.code === "line_item_auto_corrected") ? "A misread line-item value was corrected automatically because the invoice maths proves it (the AI's original value is in the note). Check each against the original." : flags.some((x) => x.code === "gstin_auto_corrected") ? "Only a GSTIN check digit was fixed automatically (you can switch back below). Check each against the original." : "Nothing was changed automatically. Check each against the original."}</p>
                     <ul className="mt-2 space-y-2">
                       {sortedFlags.map((f, i) => {
                         const { icon: Icon, cls } = flagStyle[f.severity];
