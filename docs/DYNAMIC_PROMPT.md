@@ -26,3 +26,8 @@ The second, audit, key-figures and parties readings use the same engine with a `
 
 ## Adding OCR later
 Pass `ocrText` in `DocumentSignals` where the pipeline builds the signals. Nothing else needs to change.
+
+## Tax-head blocks
+- `tax_heads` (every reading that returns totals, unless only IGST is labelled): cgst, sgst, igst and cess are separate printed figures; CGST and SGST are normally equal (copy what is printed, lower the confidence if they differ); TCS and TDS are not tax heads; copy, never derive.
+- `utgst` (only when "UTGST" is printed): copy the UTGST amount into sgst, never into cgst.
+Both are fixed sentences. The code (`tax-math.ts`) does the checking, so the model is never asked to calculate.

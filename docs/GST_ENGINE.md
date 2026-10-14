@@ -44,3 +44,18 @@ The old strict `checkTotals()` (Taxable + GST = Total) in `arithmetic.ts` was un
 
 ## Not covered
 HSN-to-rate lookup tables (rates change by notification), reverse charge, composition scheme, QR-code decoding. Review screen has no edit boxes for the new fields (TCS, TDS, round-off, net payable) yet; they are kept and used in re-checks.
+
+## Tax-head second layer (`lib/extraction/tax-math.ts`)
+Runs inside `validateInvoice()` next to the main checks. It never changes an extracted figure; it only adds flags, `summary.tax_regime` and diagnosis hints.
+
+| Check | Flag | Severity |
+|---|---|---|
+| CGST and SGST / UTGST differ by more than the tolerance (they are always equal) | `cgst_sgst_unequal` | warning |
+| Only one of CGST / SGST read, no IGST | `cgst_sgst_one_sided` | warning |
+| Line tax is neither taxable x rate nor half of it | `line_tax_rate_mismatch` | warning |
+| Cess more than 5x the taxable value | `cess_implausible` | warning |
+| TCS or TDS more than 20% of the taxable value, or TDS >= grand total | `tcs_implausible` / `tds_implausible` | warning |
+| Printed total does not reproduce | `arithmetic_total_mismatch` now carries `details.likelyCauses` (TDS already deducted, TCS / cess / CGST / SGST / IGST left out or counted twice, discount twice, pre-tax charges) and the best one in the message | error |
+
+**UTGST.** There is no separate UTGST field: UTGST is saved in `sgst_amount` (labelled "SGST / UTGST" on the review screen and in exports). `summary.tax_regime` tells which head to expect from the supplier GSTIN state and the place of supply: same state = CGST+SGST (CGST+UTGST for UT codes 04, 26, 31, 35, 38), different state = IGST. Delhi, Puducherry and J&K charge SGST.
+`normalizeAppliedTaxType()` now accepts any label that names CGST together with SGST or UTGST.
