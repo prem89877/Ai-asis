@@ -318,3 +318,106 @@ test("pipeline: image files get image guidance with their real size", async () =
   assert.match(inputs[0].systemPrompt, /image \(scan or phone photo\)/);
   assert.match(inputs[0].systemPrompt, /640 x 480 px/);
 });
+
+// ---- Every reading uses the same engine (second layer) -----------------------------------------------------------------------
+
+import { buildKeyFiguresSchema, buildPartiesSchema } from "../lib/extraction/schema.ts";
+import { composeUserPrompt } from "../lib/extraction/dynamic-prompt.ts";
+import { AUDIT_SYSTEM_PROMPT, AUDIT_USER_PROMPT, KEYFIGURES_SYSTEM_PROMPT, PARTIES_SYSTEM_PROMPT } from "../lib/extraction/prompt.ts";
+
+const PURPOSES = ["first", "verify", "audit", "keyfigures", "parties"];
+
+test("each reading's dynamic text only names fields of that reading's own schema", () => {
+  const keys = {
+    first: schemaKeys(buildResponseSchema()), verify: schemaKeys(buildResponseSchema()), audit: schemaKeys(buildResponseSchema()),
+    keyfigures: schemaKeys(buildKeyFiguresSchema()), parties: schemaKeys(buildPartiesSchema()),
+  };
+  const docTypes = new Set(DOCUMENT_TYPES);
+  for (const purpose of PURPOSES) {
+    const p = buildDynamicPrompt({ mime: PDF, pages: 3, ocrText: RICH_OCR + "\nCREDIT NOTE" }, { purpose, maxWords: 5000 });
+    const tokens = new Set(p.instructions.replace(/<ocr_text>/g, "").match(/\b[a-z]+(?:_[a-z]+)+\b/g) ?? []);
+    for (const t of tokens) {
+      if (docTypes.has(t)) { assert.ok(["first", "verify", "audit"].includes(purpose), `${purpose} mentions document type ${t}`); continue; }
+      assert.ok(keys[purpose].has(t), `${purpose}: ${t} is not in its schema`);
+    }
+  }
+});
+
+test("per-reading blocks: item rows only where items are read, parties only for the parties reading", () => {
+  const rich = (purpose) => buildDynamicPrompt({ mime: PDF, pages: 3, ocrText: RICH_OCR }, { purpose, maxWords: 5000 }).features;
+  assert.ok(rich("audit").includes("discount_column"));
+  assert.ok(!rich("keyfigures").includes("discount_column"));
+  assert.ok(!rich("parties").includes("discount_column"));
+  assert.ok(rich("keyfigures").includes("totals_core") && !rich("keyfigures").includes("gst_core"));
+  assert.ok(rich("parties").includes("party_blocks") && rich("parties").includes("many_gstins"));
+  assert.ok(!rich("first").includes("party_blocks"));
+  assert.ok(!rich("audit").includes("retry"));
+});
+
+test("blind readings stay blind: the section depends on the file only and carries no reading data", () => {
+  for (const purpose of ["audit", "keyfigures", "parties"]) {
+    const a = buildDynamicPrompt({ mime: PDF, pages: 2 }, { purpose });
+    const b = buildDynamicPrompt({ mime: PDF, pages: 2 }, { purpose });
+    assert.equal(a.instructions, b.instructions);
+    assert.doesNotMatch(a.instructions, /first_reading|first reading|INV-001|27AAPFU0939F1ZV/);
+  }
+});
+
+test("user prompt of a reading keeps its own text and gets the OCR block only when there is OCR", () => {
+  const none = buildDynamicPrompt({ mime: PDF, pages: 1 }, { purpose: "audit" });
+  assert.equal(composeUserPrompt(AUDIT_USER_PROMPT, none), AUDIT_USER_PROMPT);
+  const withOcr = buildDynamicPrompt({ mime: PDF, pages: 1, ocrText: "TAX INVOICE" }, { purpose: "audit" });
+  const u = composeUserPrompt(AUDIT_USER_PROMPT, withOcr);
+  assert.ok(u.startsWith(AUDIT_USER_PROMPT) && u.includes("<ocr_text>"));
+});
+
+function layeredSetup({ dynamicPrompt, promptBuilder }) {
+  const calls = [];
+  const geminiConfig = { apiKey: "k", model: "m", inputPricePerMTok: 0.3, outputPricePerMTok: 2.5, timeoutMs: 10_000, deadlineMs: 50_000, maxAttempts: 3, maxOutputTokens: 1000, verify: true, audit: true, totalCheck: true, partiesCheck: true, partiesRetries: 0, dynamicPrompt };
+  const bytes = minimalPdf(2);
+  let t = Date.parse("2026-10-14T00:00:00Z");
+  const deps = {
+    geminiConfig, maxPdfPages: 10, now: () => t, sleep: async () => {}, random: () => 0, log: () => {}, promptBuilder,
+    files: { download: async () => bytes },
+    gemini: async (input) => { calls.push(input); t += 100; return { ok: true, text: JSON.stringify(model()), usage: { inputTokens: 1, outputTokens: 1 } }; },
+    store: { recordUsage: async () => {}, findDuplicateCandidates: async () => [], complete: async () => "ok" },
+  };
+  return { deps, calls, ctx: { jobId: "j", invoiceId: "i", firmId: "f", userId: "u", storagePath: "f/i.pdf", mime: PDF, sha256: sha(bytes) } };
+}
+
+test("pipeline: all five readings get fixed prompt + their own dynamic section; blind ones never see the first reading", async () => {
+  const { deps, ctx, calls } = layeredSetup({ dynamicPrompt: true });
+  await runExtraction(deps, ctx);
+  assert.equal(calls.length, 5);
+  const by = (needle) => calls.find((c) => c.systemPrompt.includes(needle));
+  const verify = by("SECOND READING"), audit = by("INDEPENDENT AUDIT READING"), key = by("return only its key figures"), parties = by("return only WHO IS WHO");
+  for (const c of [calls[0], verify, audit, key, parties]) {
+    assert.ok(c, "reading present");
+    assert.equal(c.systemPrompt.split("INVOICE-SPECIFIC GUIDANCE").length - 1, 1);
+    assert.ok(c.systemPrompt.endsWith("\nReturn JSON only."));
+    assert.match(c.systemPrompt, /has 2 pages/);
+  }
+  assert.ok(verify.userPrompt.includes("<first_reading>"));
+  for (const c of [audit, key, parties]) assert.ok(!c.userPrompt.includes("first_reading") && !c.userPrompt.includes("INV-001"));
+  assert.ok(audit.systemPrompt.startsWith(AUDIT_SYSTEM_PROMPT.replace(/\nReturn JSON only\.$/, "")));
+  assert.ok(key.systemPrompt.startsWith(KEYFIGURES_SYSTEM_PROMPT.replace(/\nReturn JSON only\.$/, "")));
+  assert.ok(parties.systemPrompt.startsWith(PARTIES_SYSTEM_PROMPT.replace(/\nReturn JSON only\.$/, "")));
+  assert.deepEqual(key.responseSchema, buildKeyFiguresSchema());
+  assert.deepEqual(parties.responseSchema, buildPartiesSchema());
+});
+
+test("pipeline: switched off, every reading keeps exactly its old prompts", async () => {
+  const { deps, ctx, calls } = layeredSetup({ dynamicPrompt: false });
+  await runExtraction(deps, ctx);
+  assert.equal(calls.length, 5);
+  assert.ok(calls.slice(1).every((c) => !c.systemPrompt.includes("INVOICE-SPECIFIC GUIDANCE")));
+  assert.equal(calls[0].systemPrompt, undefined);
+});
+
+test("pipeline: engine failure leaves the extra readings on their fixed prompts and the run completes", async () => {
+  const { deps, ctx, calls } = layeredSetup({ dynamicPrompt: true, promptBuilder: () => { throw new Error("boom"); } });
+  const r = await runExtraction(deps, ctx);
+  assert.equal(calls.length, 5);
+  assert.ok(calls.every((c) => !(c.systemPrompt ?? "").includes("INVOICE-SPECIFIC GUIDANCE")));
+  assert.notEqual(r.outcome, "failed");
+});
