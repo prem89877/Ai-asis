@@ -185,7 +185,8 @@ export function normalizeAppliedTaxType(raw: string | null): StoredItemType["app
   if (raw === null) return null;
   const t = raw.trim().toUpperCase().replace(/[^A-Z]/g, "");
   if (t === "IGST") return "IGST";
-  if (/^(CGSTSGST|SGSTCGST|CGSTUTGST|UTGSTCGST|CGSTANDSGST|CGSTANDUTGST)$/.test(t)) return "CGST_SGST";
+  // Any label that names CGST together with SGST or UTGST ("CGST+SGST/UTGST", "CGST & UTGST", "UTGST/CGST") is the split tax.
+  if (t.includes("CGST") && (t.includes("SGST") || t.includes("UTGST")) && !t.includes("IGST")) return "CGST_SGST";
   if (/^(NONE|NIL|EXEMPT|NILRATED|ZERO)$/.test(t)) return "NONE";
   return null;
 }

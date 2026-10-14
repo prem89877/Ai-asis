@@ -11,6 +11,7 @@
 import { checkLineItems, hasRate, isForeign, rateToleranceFor } from "./arithmetic.ts";
 import { describeIdentifierProblem, isValidAckNo, isValidEwayBill, isValidIrn } from "./identifiers.ts";
 import { toPaise } from "./normalize.ts";
+import { checkTaxHeads, diagnoseTotalMismatch, type TaxRegime } from "./tax-math.ts";
 import type { ReviewFlag, StoredExtracted, StoredItem } from "./types.ts";
 
 export { validateLineItem } from "./arithmetic.ts";
@@ -285,11 +286,23 @@ export function validateInvoiceTotals(e: StoredExtracted, items: StoredItem[], o
 
   if (!matched) {
     const absent = (["cgst", "sgst", "igst", "cess"] as const).filter((k) => fs[k]?.state === "missing");
+    // Second layer (tax-math.ts): which single tax head, if left out or counted twice, would explain the printed total?
+    const lineImplied = items.length > 0 && items.every((it) => has(it.gst_rate) && has(it.taxable_amount))
+      ? items.reduce((a, it) => a + toPaise(((it.taxable_amount as number) * (it.gst_rate as number)) / 100), 0)
+      : null;
+    const causes = diagnoseTotalMismatch({
+      actual, base: base0, cgst: Math.abs(p(e.cgst_amount)), sgst: Math.abs(p(e.sgst_amount)), igst: Math.abs(p(e.igst_amount)), cess: Math.abs(p(e.cess_amount)),
+      tcs, tds, discount: disc, charges, expectedTotal: tier1(base0), lineImpliedTax: lineImplied,
+    });
+    const headTax = Math.abs(p(e.cgst_amount)) + Math.abs(p(e.sgst_amount)) + Math.abs(p(e.igst_amount));
+    const taxDisagrees = lineImplied !== null && foreignRate === null && Math.abs(Math.abs(lineImplied) - headTax) > tol + items.length;
     const netPrinted = has(e.net_payable_amount) ? toPaise(e.net_payable_amount) : null;
     flags.push({
       code: "arithmetic_total_mismatch", severity: "error", field: "grand_total",
-      message: "Taxable value plus taxes (plus TCS, less TDS where printed) does not equal the grand total or the net payable.",
+      message: `Taxable value plus taxes (plus TCS, less TDS where printed) does not equal the grand total or the net payable.${causes.length > 0 ? ` Most likely: ${causes[0].message}` : ""}`,
       details: {
+        ...(causes.length > 0 ? { likelyCauses: causes } : {}),
+        ...(taxDisagrees ? { taxFromLineRates: Math.abs(lineImplied as number) / 100, taxPrintedOnInvoice: headTax / 100 } : {}),
         expected: expectedGrand, extracted: actual / 100, taxFieldsNotFound: absent,
         ...(expectedNet !== null ? { expectedNetPayable: expectedNet } : {}),
         ...(header === null ? { taxableFromItems: true } : {}),
@@ -483,6 +496,7 @@ export interface ValidationSummary {
   verification: Verification;
   line_checks: { checked: number; failed: number };
   negative_lines?: { positions: number[]; status: NegativeLines["status"] };
+  tax_regime?: TaxRegime; // supplier state vs place of supply: which tax heads are expected (CGST+SGST, CGST+UTGST or IGST)
 }
 
 export interface InvoiceValidation {
@@ -502,8 +516,9 @@ export function validateInvoice(data: InvoiceData, opts: EngineOptions): Invoice
   const meta = validateEInvoiceMetadata(e);
   const neg = validateNegativeLines(e, items, opts.tolerancePaise);
   const verification = tripleCheckTax(e, items, opts.tolerancePaise);
+  const heads = checkTaxHeads(e, items, opts.tolerancePaise); // second layer: each tax head on its own (tax-math.ts)
 
-  const flags: ReviewFlag[] = [...lineFlags, ...totals.flags, ...alloc.flags, ...neg.flags, ...meta]; // the cross-check verdict is kept in the summary, not as a flag, so clean invoices stay flag-free
+  const flags: ReviewFlag[] = [...lineFlags, ...totals.flags, ...alloc.flags, ...heads.flags, ...neg.flags, ...meta]; // the cross-check verdict is kept in the summary, not as a flag, so clean invoices stay flag-free
   const lineFails = lineFlags.filter((f) => f.code === "arithmetic_line_mismatch").length;
   const summary: ValidationSummary = {
     version: 1,
@@ -520,6 +535,7 @@ export function validateInvoice(data: InvoiceData, opts: EngineOptions): Invoice
     slabs: slabSummary(items, alloc.assignment),
     verification,
     line_checks: { checked: items.length, failed: lineFails },
+    tax_regime: heads.regime,
     ...(neg.positions.length > 0 && neg.status !== "not_applicable" ? { negative_lines: { positions: neg.positions, status: neg.status } } : {}),
   };
   return {

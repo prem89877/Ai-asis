@@ -47,6 +47,7 @@ export interface InvoiceProfile {
   hsnSummary: boolean;
   discountColumn: boolean;
   cess: boolean;
+  utgst: boolean; // "UTGST" is printed (Union Territory without a legislature)
   eInvoice: boolean;
   ewayBill: boolean;
   tcs: boolean;
@@ -87,7 +88,7 @@ function distinct<T>(values: T[]): T[] {
 
 function emptyProfile(): InvoiceProfile {
   return {
-    hasText: false, kind: "unknown", regime: "unknown", itemTable: false, hsnSummary: false, discountColumn: false, cess: false,
+    hasText: false, kind: "unknown", regime: "unknown", itemTable: false, hsnSummary: false, discountColumn: false, cess: false, utgst: false,
     eInvoice: false, ewayBill: false, tcs: false, tds: false, roundOff: false, reverseCharge: false, foreignCurrencies: [],
     devanagari: false, declaredPages: null, continuation: false, gstinCount: 0, suspectGstins: 0,
     conflictingInvoiceNumbers: false, conflictingTotals: false, injectionSuspected: false,
@@ -119,6 +120,7 @@ export function analyzeInvoiceText(raw: string | null | undefined): InvoiceProfi
   p.hsnSummary = /\bHSN\s*\/?\s*SAC\s+(?:SUMMARY|WISE)\b|\bHSN[\s-]*WISE\b|\bTAX\s+(?:RATE[\s-]*WISE|SUMMARY)\b/.test(up) || (up.match(/\bHSN\s*\/?\s*SAC\b/g)?.length ?? 0) >= 2;
   p.discountColumn = /\bDISC(?:OUNT)?\b/.test(up);
   p.cess = /\bCESS\b/.test(up);
+  p.utgst = /\bUTGST\b|\bUT\s*GST\b/.test(up);
   p.eInvoice = /\bIRN\b|\bACK(?:NOWLEDG(?:E)?MENT)?\s*(?:NO|NUMBER|#)/.test(up);
   p.ewayBill = /\bE[\s-]?WAY\s*BILL\b/.test(up);
   p.tcs = /\bTCS\b|\b206C\b/.test(up);
@@ -206,6 +208,8 @@ const APPLIES: Record<string, PromptPurpose[]> = {
   discount_column: ITEMS,
   continuation_rows: ITEMS,
   cess: TOTALS,
+  tax_heads: TOTALS,
+  utgst: TOTALS,
   reverse_charge: TOTALS,
   many_gstins: PARTY,
   suspect_gstin: PARTY,
@@ -283,6 +287,16 @@ function buildBlocks(sig: DocumentSignals, profile: InvoiceProfile, ocrIncluded:
     id: "party_blocks", priority: 25,
     text: "The supplier (issuer) block, the bill-to block and any ship-to block are different parties. Record each GSTIN with the role of the block it sits in, and never cut a PAN out of a GSTIN.",
   });
+  // Tax heads (second layer of the tax math, see tax-math.ts): the model only COPIES each head; the code checks the sums.
+  if (profile.regime === "cgst_sgst" || profile.regime === "mixed" || profile.regime === "unknown") {
+    b.push({
+      id: "tax_heads", priority: 27,
+      text: "Tax heads are separate printed figures: cgst, sgst and igst. CGST and SGST normally carry the same amount; if the page shows different amounts, copy each one as printed and give a low confidence rather than making them equal. cess is its own figure: never fold it into a tax head or into taxable_value. TCS and TDS are not tax heads: never put them in cgst, sgst, igst or cess. Copy each figure as printed; do not derive one from another.",
+    });
+  }
+  if (profile.utgst) {
+    b.push({ id: "utgst", priority: 26, text: "UTGST is printed (Union Territory): copy the UTGST amount into sgst, never into cgst, and keep CGST as its own figure. A UTGST rate or amount is not a second cess." });
+  }
   if (profile.eInvoice || profile.ewayBill) {
     b.push({ id: "e_invoice", priority: 30, text: 'An e-invoice or e-way bill block is present: read irn, ack_no and eway_bill_no only from it, character by character. irn must be exactly 64 characters (0-9, a-f), eway_bill_no 12 digits; otherwise "unreadable".' });
   }
