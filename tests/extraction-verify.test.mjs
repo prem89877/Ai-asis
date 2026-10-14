@@ -89,20 +89,22 @@ test("the first reading is kept when only it passes the GSTIN check, with no fla
   assert.equal(relevant(saved(calls)).length, 0);
 });
 
-test("GSTIN with a wrong check digit, both readings agree with >95% confidence: auto-corrected, raw kept, still completed", async () => {
+test("GSTIN with a wrong check digit that both readings agree on (>95%): kept exactly as printed, never replaced", async () => {
   const same = model({ supplier_gstin: f("27AAPFU0939F1ZW", 0.97) });
   const { deps, ctx, calls } = setup([ok(same), ok(same)]);
   const r = await runExtraction(deps, ctx);
   assert.equal(r.outcome, "completed");
-  assert.equal(flagOf(saved(calls), "invalid_gstin").length, 0);
-  assert.equal(saved(calls).vendor_gstin, "27AAPFU0939F1ZV"); // only the 15th character changed
-  const flags = flagOf(saved(calls), "gstin_auto_corrected");
-  assert.equal(flags.length, 1);
-  assert.equal(flags[0].severity, "info");
-  assert.equal(flags[0].message, "GSTIN Auto-Corrected (Checksum Fixed)");
-  assert.equal(flags[0].details.gstin_auto_corrected, true);
-  assert.equal(flags[0].details.original_raw_gstin, "27AAPFU0939F1ZW");
-  assert.deepEqual(saved(calls).field_status.supplier_gstin.autoCorrected, { from: "27AAPFU0939F1ZW", to: "27AAPFU0939F1ZV" });
+  assert.equal(saved(calls).vendor_gstin, "27AAPFU0939F1ZW"); // the raw, source-supported value survives
+  assert.equal(flagOf(saved(calls), "gstin_auto_corrected").length, 0);
+  assert.equal(saved(calls).gstin_auto_corrected, false);
+  const note = flagOf(saved(calls), "gstin_checksum_note");
+  assert.equal(note.length, 1);
+  assert.equal(note[0].severity, "info");
+  assert.deepEqual(note[0].details.suggestions, ["27AAPFU0939F1ZV"]); // proposed only
+  const meta = saved(calls).field_status.supplier_gstin;
+  assert.equal(meta.autoCorrected, undefined);
+  assert.equal(meta.rawValue, "27AAPFU0939F1ZW");
+  assert.equal(meta.gstinCheck, "checksum_failed");
 });
 
 test("single reading with a bad check digit still warns (a misread is possible)", async () => {

@@ -249,14 +249,14 @@ test("malformed IRN / e-way bill number: information note only, totals still pas
 
 // ---- GSTIN auto-repair ---------------------------------------------------------------------------------------------------
 
-test("GSTIN with a misprinted check digit is repaired when two readings agree with confidence above 95%", () => {
+test("GSTIN with a misprinted check digit is NOT repaired, even when two readings agree with confidence above 95%", () => {
   const n = norm(model({ supplier_gstin: f("27AAPFU0939F1ZW", 0.97) }), { agreed: new Set(["supplier_gstin"]) });
-  assert.equal(n.extracted.vendor_gstin, "27AAPFU0939F1ZV");
-  assert.equal(n.extracted.gstin_auto_corrected, true);
-  const flag = n.extracted.review_flags.find((x) => x.code === "gstin_auto_corrected");
+  assert.equal(n.extracted.vendor_gstin, "27AAPFU0939F1ZW");
+  assert.equal(n.extracted.gstin_auto_corrected, false);
+  assert.ok(!n.extracted.review_flags.some((x) => x.code === "gstin_auto_corrected"));
+  const flag = n.extracted.review_flags.find((x) => x.code === "gstin_checksum_note");
   assert.equal(flag.severity, "info");
-  assert.equal(flag.details.original_raw_gstin, "27AAPFU0939F1ZW");
-  assert.ok(!n.extracted.review_flags.some((x) => x.code === "invalid_gstin"));
+  assert.deepEqual(flag.details.suggestions, ["27AAPFU0939F1ZV"]);
 });
 
 test("GSTIN with a wrong check digit is NOT changed when the reading is not confirmed, and the state code is never touched", () => {

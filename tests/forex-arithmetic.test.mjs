@@ -159,15 +159,15 @@ test("GSTIN flag text carries the suggestion; the suggestion is never applied to
   assert.deepEqual(fl.details.suggestions, ["27AAPFU0939F1ZV"]);
 });
 
-test("GSTIN auto-correction needs two agreeing readings with confidence above 95%; otherwise it is only a warning", () => {
+test("a GSTIN with a wrong check digit is never replaced, however many readings agree; agreement only softens the flag", () => {
   const m = (c) => model({ supplier_gstin: f("27AAPFU0939F1ZW", c) });
   const agreed = new Set(["supplier_gstin"]);
   const hi = normalizeExtraction(m(0.97), { model: "m", agreed });
-  assert.equal(hi.extracted.vendor_gstin, "27AAPFU0939F1ZV");
+  assert.equal(hi.extracted.vendor_gstin, "27AAPFU0939F1ZW");
   const note = hi.extracted.review_flags.find((x) => x.field === "supplier_gstin");
-  assert.equal(note.code, "gstin_auto_corrected");
+  assert.equal(note.code, "gstin_checksum_note");
   assert.equal(note.severity, "info");
-  assert.equal(note.message, "GSTIN Auto-Corrected (Checksum Fixed)");
+  assert.ok(!hi.extracted.review_flags.some((x) => x.code === "gstin_auto_corrected"));
   for (const [c, ag] of [[0.95, agreed], [0.9, agreed], [0.99, undefined]]) {
     const r = normalizeExtraction(m(c), { model: "m", agreed: ag });
     const fl = r.extracted.review_flags.find((x) => x.field === "supplier_gstin");
@@ -175,8 +175,8 @@ test("GSTIN auto-correction needs two agreeing readings with confidence above 95
     assert.equal(fl.severity, "warning");
     assert.equal(r.extracted.vendor_gstin, "27AAPFU0939F1ZW"); // untouched
   }
-  const off = normalizeExtraction(m(0.97), { model: "m", agreed, gstinAutoCorrect: false });
-  assert.equal(off.extracted.vendor_gstin, "27AAPFU0939F1ZW");
+  const legacy = normalizeExtraction(m(0.97), { model: "m", agreed, gstinAutoCorrect: true });
+  assert.equal(legacy.extracted.vendor_gstin, "27AAPFU0939F1ZW"); // the old option can no longer switch replacement on
 });
 
 // ---- Review screen with a foreign-currency invoice (no stored exchange rate) --------------------------------------------

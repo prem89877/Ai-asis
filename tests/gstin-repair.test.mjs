@@ -1,55 +1,67 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateAndRepairGSTIN, computeGstinCheckDigit } from "../lib/extraction/gstin.ts";
+import { validateGstin, computeGstinCheckDigit, suggestGstinFixes } from "../lib/extraction/gstin.ts";
 import { checkGstin } from "../lib/extraction/normalize.ts";
 import { applyReview } from "../lib/review/apply.ts";
 import { computeReviewFlags } from "../lib/review/flags.ts";
 import { HEADER_COLUMNS } from "../lib/review/fields.ts";
 
-test("misprinted check digit: 27AABCG5541Q1ZU is repaired to its valid check digit and the raw value is kept", () => {
+test("misprinted check digit: validateGstin keeps the raw value and only PROPOSES the valid check digit", () => {
   const digit = computeGstinCheckDigit("27AABCG5541Q1Z");
-  const r = validateAndRepairGSTIN("27AABCG5541Q1ZU");
-  assert.equal(r.status, "auto_corrected");
-  assert.equal(r.gstin, "27AABCG5541Q1Z" + digit);
-  assert.equal(checkGstin(r.gstin).ok, true);
-  assert.equal(r.original_raw_gstin, "27AABCG5541Q1ZU");
-  assert.equal(r.gstin_auto_corrected, true);
-  assert.deepEqual(r.corrected_char, { position: 15, from: "U", to: digit });
+  const r = validateGstin("27AABCG5541Q1ZU");
+  assert.equal(r.status, "checksum_failed");
+  assert.equal(r.valid, false);
+  assert.equal(r.gstin, "27AABCG5541Q1ZU"); // never replaced
+  assert.equal(r.raw, "27AABCG5541Q1ZU");
+  assert.deepEqual(r.proposed, ["27AABCG5541Q1Z" + digit]);
+  assert.equal(checkGstin(r.proposed[0]).ok, true);
 });
 
-test("common look-alike misprints in position 15 (6/U, 0/O, 1/I, 2/Z) are all repaired", () => {
+test("look-alike misprints in position 15 are proposed, never applied", () => {
   for (const base of ["27AAPFU0939F1Z", "29AABCT1332L1Z", "07AAACH7409R1Z"]) {
     const good = base + computeGstinCheckDigit(base);
-    assert.equal(checkGstin(good).ok, true);
     for (const bad of ["U", "O", "I", "Z", "6", "0", "1", "2"]) {
       if (bad === good[14]) continue;
-      const r = validateAndRepairGSTIN(base + bad);
-      assert.equal(r.gstin, good, `${base}${bad}`);
-      assert.equal(r.auto_corrected, true);
+      const r = validateGstin(base + bad);
+      assert.equal(r.gstin, base + bad, `${base}${bad}`);
+      assert.ok(r.proposed.includes(good));
     }
   }
 });
 
 test("a valid GSTIN is returned unchanged, lower case and spaces are cleaned", () => {
-  const r = validateAndRepairGSTIN(" 27aapfu0939f1zv ");
+  const r = validateGstin(" 27aapfu0939f1zv ");
   assert.equal(r.status, "valid");
-  assert.equal(r.auto_corrected, false);
+  assert.equal(r.valid, true);
   assert.equal(r.gstin, "27AAPFU0939F1ZV");
+  assert.equal(r.proposed, undefined);
 });
 
-test("nothing is repaired when the first 14 characters are not a GSTIN layout, or the length is wrong", () => {
-  for (const bad of ["27AAPFU0939F1ZVX", "27AAPFU0939F1", "", "27AAPFUO939F1ZW", "27AAPFU0939F1AW", "ZZZZZZZZZZZZZZZ"]) {
-    const r = validateAndRepairGSTIN(bad);
-    assert.equal(r.auto_corrected, false, bad);
+test("wrong length or layout: kept as read and reported; nothing is repaired", () => {
+  for (const bad of ["27AAPFU0939F1ZVX", "27AAPFU0939F1", "27AAPFUO939F1ZW", "27AAPFU0939F1AW", "ZZZZZZZZZZZZZZZ"]) {
+    const r = validateGstin(bad);
+    assert.equal(r.status, "format_invalid", bad);
     assert.equal(r.gstin, bad.toUpperCase());
     assert.equal(r.valid, false);
   }
 });
 
-test("allowRepair: false only reports, never changes the value", () => {
-  const r = validateAndRepairGSTIN("27AABCG5541Q1ZU", { allowRepair: false });
-  assert.equal(r.auto_corrected, false);
-  assert.equal(r.gstin, "27AABCG5541Q1ZU");
+test("missing GSTIN: reported as missing, no value is invented", () => {
+  for (const none of ["", "   ", null, undefined]) {
+    const r = validateGstin(none);
+    assert.equal(r.status, "missing");
+    assert.equal(r.gstin, "");
+    assert.equal(r.proposed, undefined);
+  }
+});
+
+test("a single ambiguous character (O/0, I/1, B/8, S/5) is a suggestion only", () => {
+  const good = "27AAPFU0939F1ZV";
+  const printed = "27AAPFU0939F1ZV".replace("0939", "O939"); // letter O in a digit position: layout fails
+  const r = validateGstin(printed);
+  assert.equal(r.status, "format_invalid");
+  assert.equal(r.gstin, printed);
+  assert.ok(suggestGstinFixes(printed).includes(good));
 });
 
 // ---- Review screen: the raw/validated toggle and the audit note survive edits -------------------------------------------

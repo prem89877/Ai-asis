@@ -87,7 +87,7 @@ test("a GSTIN character misread in the first reading is fixed by the other readi
   assert.equal(saved(calls).validation_summary.verification.fields.supplier_gstin.status, "verified");
 });
 
-test("three readings each wrong in a different character: the character vote rebuilds the GSTIN and says so", async () => {
+test("three readings each wrong in a different character: the assembled GSTIN is only proposed, never saved", async () => {
   const { deps, ctx, calls } = setup([
     ok(good({ supplier_gstin: f(swap(SUP, 3, "B")) })),
     ok(good({ supplier_gstin: f(swap(SUP, 8, "8")) })),
@@ -97,9 +97,13 @@ test("three readings each wrong in a different character: the character vote reb
   ], { partiesRetries: 0 });
   await runExtraction(deps, ctx);
   const e = saved(calls);
-  assert.equal(e.vendor_gstin, SUP);
-  assert.equal(flagOf(e, "gstin_char_voted").length, 1);
-  assert.equal(flagOf(e, "gstin_char_voted")[0].severity, "info");
+  assert.notEqual(e.vendor_gstin, SUP); // not invented from pieces
+  assert.ok([swap(SUP, 3, "B"), swap(SUP, 8, "8"), swap(SUP, 6, "V"), swap(SUP, 10, "0")].includes(e.vendor_gstin)); // one of the values really read
+  assert.equal(flagOf(e, "gstin_char_voted").length, 0);
+  const proposed = flagOf(e, "gstin_char_proposed");
+  assert.equal(proposed.length, 1);
+  assert.equal(proposed[0].severity, "warning");
+  assert.equal(proposed[0].details.proposed, SUP);
 });
 
 test("supplier and buyer GSTIN swapped in the readings are put back, with a warning", async () => {

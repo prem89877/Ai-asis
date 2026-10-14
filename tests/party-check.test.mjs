@@ -103,14 +103,17 @@ test("resolveParties: no mix-up is claimed without printed role evidence", () =>
   assert.equal(r.flags.length, 0);
 });
 
-test("resolveParties: character vote replaces a merged value that no reading had right and reports it", () => {
+test("resolveParties: a character-voted GSTIN no reading gave is only PROPOSED, the value that was read stays", () => {
   const a = model({ supplier_gstin: f(swapChar(SUP, 3, "B")) });
   const b = model({ supplier_gstin: f(swapChar(SUP, 8, "8")) });
   const p = party({ supplier_gstin: f(swapChar(SUP, 6, "V")) });
   const r = resolveParties([a, b], [p], a);
-  assert.equal(r.merged.supplier_gstin.value, SUP);
-  assert.ok(r.changed.includes("supplier_gstin"));
-  assert.ok(r.flags.some((x) => x.code === "gstin_char_voted" && x.severity === "info"));
+  assert.equal(r.merged.supplier_gstin.value, swapChar(SUP, 3, "B")); // untouched: not replaced by the assembled number
+  assert.ok(!r.changed.includes("supplier_gstin"));
+  const flag = r.flags.find((x) => x.code === "gstin_char_proposed");
+  assert.ok(flag && flag.severity === "warning");
+  assert.equal(flag.details.proposed, SUP);
+  assert.ok(!r.flags.some((x) => x.code === "gstin_char_voted"));
 });
 
 // ---- final audit ----
