@@ -9,6 +9,7 @@ import { estimateCostUsd } from "./gemini.ts";
 import type { GeminiCaller, GeminiCallResult } from "./gemini.ts";
 import { getCheckConfig } from "./config.ts";
 import type { CheckConfig, GeminiConfig } from "./config.ts";
+import { reconcileLineItems } from "./line-fix.ts";
 import { nameKey, normalizeExtraction } from "./normalize.ts";
 import { preflight } from "./preflight.ts";
 import { AUDIT_SYSTEM_PROMPT, AUDIT_USER_PROMPT, buildVerifyUserPrompt, KEYFIGURES_SYSTEM_PROMPT, KEYFIGURES_USER_PROMPT, PARTIES_SYSTEM_PROMPT, PARTIES_USER_PROMPT, VERIFY_SYSTEM_PROMPT } from "./prompt.ts";
@@ -436,8 +437,21 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
       }
     }
 
-    const { extracted, items } = normalizeExtraction(model, { model: cfg.model, now: new Date(now()), agreed });
-    const flags: ReviewFlag[] = [...extracted.review_flags, ...runChecks(extracted, items, checkCfg), ...recheckNotes];
+    const normalized = normalizeExtraction(model, { model: cfg.model, now: new Date(now()), agreed });
+    const extracted = normalized.extracted;
+    let items = normalized.items;
+
+    // Line-item maths reconciliation (line-fix.ts): quantity x unit price (less discount) x rate = taxable value. A misread digit
+    // (INR 10,000 read as 1,000) is corrected here when the maths, the model's confidence and independent witnesses all agree;
+    // everything else is left for the normal checks below and a human. The original value is kept in the field status and a flag.
+    const lineFixFlags: ReviewFlag[] = [];
+    if (checkCfg.lineFix !== false) {
+      const fix = reconcileLineItems(items, extracted, { tolerancePaise: checkCfg.tolerancePaise, maxConfidence: checkCfg.lineFixMaxConfidence });
+      items = fix.items;
+      lineFixFlags.push(...fix.flags);
+      if (fix.fixed > 0) log("extraction_line_autofix", { jobId: ctx.jobId, fixed: fix.fixed, skipped: fix.skipped });
+    }
+    const flags: ReviewFlag[] = [...extracted.review_flags, ...runChecks(extracted, items, checkCfg), ...recheckNotes, ...lineFixFlags];
 
     // GST validation engine verdict: saved with the invoice. A difference of up to INR 2.00 between the calculated and the
     // printed grand total is recorded as round_off_amount (source "computed"), so the original figures are never changed.

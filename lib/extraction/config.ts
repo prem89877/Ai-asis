@@ -31,6 +31,8 @@ export interface GeminiConfig {
 export interface CheckConfig {
   lowConfidence: number; // confidence below this is flagged
   tolerancePaise: number; // arithmetic tolerance (100 = INR 1.00)
+  lineFix?: boolean; // correct a misread quantity / unit price / taxable value when the line maths and independent evidence prove it (EXTRACTION_LINE_FIX=off to disable)
+  lineFixMaxConfidence?: number; // a value the model read with at least this confidence is only corrected when all three witnesses agree (default 0.95)
 }
 
 type Env = Record<string, string | undefined>;
@@ -96,5 +98,7 @@ export function getCheckConfig(env: Env = process.env): CheckConfig {
   return {
     lowConfidence: num(env, "EXTRACTION_LOW_CONFIDENCE", 0.8, 0, 1),
     tolerancePaise: int(env, "EXTRACTION_TOLERANCE_PAISE", 100, 0, 100_000),
+    lineFix: switchedOn(env.EXTRACTION_LINE_FIX),
+    lineFixMaxConfidence: num(env, "EXTRACTION_LINE_FIX_MAX_CONFIDENCE", 0.95, 0, 1),
   };
 }
