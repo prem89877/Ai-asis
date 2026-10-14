@@ -19,7 +19,7 @@ Target: about 200-300 words (soft limit, `maxWords`). Required blocks are never 
 
 ## Integration
 `pipeline.ts` builds the prompt for each first-reading attempt (`attempt`, `previousFailure` are passed in) and sends it through the existing `systemPrompt` / `userPrompt` overrides of `callGemini`. If the engine throws, the call is made with the unchanged fixed prompts.
-The second, audit, key-figures and parties readings are **not** changed.
+The second, audit, key-figures and parties readings use the same engine with a `purpose` (`verify`, `audit`, `keyfigures`, `parties`). Each purpose gets only the blocks that name fields of that reading's own schema (a test enforces it). Blind readings get text built from the file's properties only: no data from another reading.
 
 ## Switch
 `EXTRACTION_DYNAMIC_PROMPT=off` (also `false`, `0`, `no`) sends the fixed prompt only. Default: on. `npm run eval:extraction` uses the same switch, so the two prompts can be scored on the same fixtures.
