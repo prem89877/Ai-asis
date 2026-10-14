@@ -35,7 +35,7 @@ Grand Total: 1,18,000.00   Grand Total: 1,17,000.00
 
 test("no OCR: fixed-text sections only, inside the word target, user prompt unchanged", () => {
   const p = buildDynamicPrompt({ mime: PDF, pages: 3 });
-  assert.deepEqual(ids(p), ["scope", "pdf_multipage", "gst_core"]);
+  assert.deepEqual(ids(p), ["scope", "pdf_multipage", "gst_core", "tax_heads"]);
   assert.match(p.instructions, /has 3 pages/);
   assert.ok(p.wordCount >= 120 && p.wordCount <= 300, `words: ${p.wordCount}`);
   assert.equal(p.userPrompt, USER_PROMPT);
