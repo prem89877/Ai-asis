@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/Button";
 
 interface Skipped { invoiceId: string; invoiceNumber: string | null; reason: string }
 
-// EXPERIMENTAL. Shown only when the server has TALLY_EXPORT_ENABLED=true. Nothing is sent to Tally: it downloads a file.
+// EXPERIMENTAL. Available by default; hidden only when the server has TALLY_EXPORT_ENABLED=false. Nothing is sent to Tally: it downloads a file.
 export function TallyPanel({ available }: { available: boolean }) {
   const [format, setFormat] = useState<"xml" | "json" | "csv">("xml");
   const [cfg, setCfg] = useState({ voucherType: "Purchase", purchaseLedger: "Purchase", cgstLedger: "Input CGST", sgstLedger: "Input SGST", igstLedger: "Input IGST", cessLedger: "Input Cess", roundOffLedger: "Round Off", companyName: "" });
@@ -44,7 +44,7 @@ export function TallyPanel({ available }: { available: boolean }) {
         <p className="mt-0.5 text-xs text-ink-muted">Creates a purchase-voucher file from verified invoices. Not yet verified against Tally: import it into a COPY of a test company first. Nothing is posted automatically.</p>
       </div>
       <div className="space-y-4 px-5 py-4 text-sm">
-        {!available ? <p className="text-ink-muted">Not enabled on this server (TALLY_EXPORT_ENABLED).</p> : (
+        {!available ? <p className="text-ink-muted">Turned off on this server (TALLY_EXPORT_ENABLED=false).</p> : (
           <>
             <div className="grid gap-3 sm:grid-cols-2">
               {labels.map(([k, l]) => (
