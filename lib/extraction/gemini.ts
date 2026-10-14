@@ -23,6 +23,9 @@ export interface GeminiCallInput {
   userPrompt?: string;
   // Optional schema override (the key-figures reading uses a small schema). Default: the full invoice schema.
   responseSchema?: unknown;
+  // Optional: ask Gemini to read the file at high media resolution (more tokens per page, small print is easier to read).
+  // Only the targeted source verification asks for it. Never sent by the other readings.
+  highResolution?: boolean;
 }
 
 export type GeminiCallResult =
@@ -80,6 +83,7 @@ export const callGemini: GeminiCaller = async (input) => {
       responseMimeType: "application/json",
       responseSchema: input.responseSchema ?? buildResponseSchema(),
       maxOutputTokens: input.maxOutputTokens,
+      ...(input.highResolution ? { mediaResolution: "MEDIA_RESOLUTION_HIGH" } : {}),
     },
   };
 

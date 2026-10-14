@@ -26,6 +26,7 @@ export interface GeminiConfig {
   totalCheck?: boolean; // blind key-figures reading (totals block, e-invoice identifiers, amount in words) (EXTRACTION_TOTAL_CHECK=off to disable)
   partiesCheck?: boolean; // blind parties reading (supplier / buyer name, GSTIN, PAN, state, every printed GSTIN) (EXTRACTION_PARTIES_CHECK=off to disable)
   dynamicPrompt?: boolean; // invoice-specific instruction section added to the FIRST reading's system prompt (dynamic-prompt.ts) (EXTRACTION_DYNAMIC_PROMPT=off to disable)
+  sourceVerify?: boolean; // targeted re-read of only the suspicious values against the original file (source-verify.ts) (EXTRACTION_SOURCE_VERIFY=off to disable; also needs verify on)
   partiesRetries?: number; // extra parties readings when a GSTIN is still not verified after the vote (EXTRACTION_PARTIES_RETRIES, 0 to 3, default 1)
 }
 
@@ -100,6 +101,7 @@ export function getGeminiConfig(env: Env = process.env): GeminiConfig | null {
     totalCheck: switchedOn(env.EXTRACTION_TOTAL_CHECK),
     partiesCheck: switchedOn(env.EXTRACTION_PARTIES_CHECK),
     dynamicPrompt: switchedOn(env.EXTRACTION_DYNAMIC_PROMPT),
+    sourceVerify: switchedOn(env.EXTRACTION_SOURCE_VERIFY),
     partiesRetries: int(env, "EXTRACTION_PARTIES_RETRIES", 1, 0, 3),
   };
 }

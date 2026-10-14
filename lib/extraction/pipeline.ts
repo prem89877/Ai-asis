@@ -26,6 +26,8 @@ import { buildKeyFiguresSchema, buildPartiesSchema, validateKeyFigures, validate
 import { auditExtraction, needsAnotherPartiesReading } from "./final-audit.ts";
 import { resolveParties } from "./party-check.ts";
 import type { GstinVerdict } from "./party-check.ts";
+import { applySourceReading, buildSourceSchema, buildSourceUserPrompt, detectSuspicious, SOURCE_SYSTEM_PROMPT, unavailableSummary, validateSourceReading } from "./source-verify.ts";
+import type { SourceVerifySummary } from "./source-verify.ts";
 import { resolveGrandTotal } from "./total-check.ts";
 import type { GrandTotalVerdict, ReadingTotal } from "./total-check.ts";
 import { reconcile, reconcileMany, recheckFlags } from "./verify.ts";
@@ -122,6 +124,8 @@ const MIN_TIME_FOR_RETRY_MS = 8_000;
 // The second check only starts if this much of the run budget is left, and always leaves a margin for saving.
 const MIN_TIME_FOR_VERIFY_MS = 12_000;
 const VERIFY_SAVE_MARGIN_MS = 4_000;
+// The targeted source check is one more provider call after the other layers. It only starts if this much time is left (after the save margin).
+const MIN_TIME_FOR_SOURCE_VERIFY_MS = 8_000;
 
 function supplierCompatible(e: StoredExtracted, c: DuplicateCandidate): boolean {
   if (e.vendor_gstin && c.vendorGstin) return e.vendor_gstin === c.vendorGstin;
@@ -481,7 +485,7 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
       }
     }
     const normalized = normalizeExtraction(storedModel, { model: cfg.model, now: new Date(now()), agreed });
-    const extracted = normalized.extracted;
+    let extracted = normalized.extracted;
     if (storedModel !== model) extracted.raw_extraction = model;
     let items = normalized.items;
 
@@ -494,6 +498,68 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
       items = fix.items;
       lineFixFlags.push(...fix.flags);
       if (fix.fixed > 0) log("extraction_line_autofix", { jobId: ctx.jobId, fixed: fix.fixed, skipped: fix.skipped });
+    }
+
+    // Source-grounded second-layer verification (source-verify.ts). Only when values are still suspicious after every layer above, one
+    // short targeted re-read of the ORIGINAL file (blind: the saved values are not shown) is made. The answer is judged in plain code:
+    // a value is replaced only when its printed quote, a high confidence and a rule that does not depend on the model all agree, and the
+    // original value is kept. It works on copies: any failure, timeout or malformed answer leaves the values exactly as they were.
+    // Switch: EXTRACTION_SOURCE_VERIFY (needs EXTRACTION_VERIFY on). Runs before the maths checks so those see the corrected values.
+    let sourceSummary: SourceVerifySummary | null = null;
+    const sourceFlags: ReviewFlag[] = [];
+    if (cfg.sourceVerify && cfg.verify) {
+      try {
+        const earlyFlags: ReviewFlag[] = [...extracted.review_flags, ...runChecks(extracted, items, checkCfg), ...recheckNotes, ...rowFlags, ...lineFixFlags];
+        const allReadings = readingsForParties(firstReading, extraFull);
+        const early = auditExtraction({
+          extracted, items, merged: storedModel, readings: allReadings, parties, verdicts,
+          totalStatus: verdict && verdict.status !== "no_value" ? verdict.status : null, flags: earlyFlags, now: new Date(now()),
+        });
+        const targets = detectSuspicious({ extracted, items, report: early.report, flags: earlyFlags, lowConfidence: checkCfg.lowConfidence });
+        if (targets.length === 0) {
+          sourceSummary = { status: "not_needed", suspicious: 0, checked: 0, confirmed: 0, corrected: 0, unresolved: 0, not_checked: 0, source_access: "original_file", region_ocr: false, entries: [] };
+        } else {
+          const left = cfg.deadlineMs - (now() - started) - VERIFY_SAVE_MARGIN_MS;
+          if (left < MIN_TIME_FOR_SOURCE_VERIFY_MS) {
+            sourceSummary = unavailableSummary("skipped_time", targets);
+            sourceFlags.push({ code: "source_verify_skipped", severity: "info", message: "The check of suspicious values against the original document was skipped because time ran out. Compare the flagged values with the original." });
+          } else {
+            const ask = (highResolution: boolean, budget: number) =>
+              deps.gemini({
+                apiKey: cfg.apiKey, model: cfg.model, mime: ctx.mime, data: bytes, timeoutMs: Math.max(1_000, Math.min(cfg.timeoutMs, budget)),
+                maxOutputTokens: cfg.maxOutputTokens, fetchImpl: deps.fetchImpl, systemPrompt: SOURCE_SYSTEM_PROMPT,
+                userPrompt: buildSourceUserPrompt(targets), responseSchema: buildSourceSchema(), highResolution,
+              }).catch(() => null);
+            // High media resolution first. If the provider rejects that setting, one retry without it (when time allows).
+            let res = await ask(true, left);
+            if (res && !res.ok && res.code === "provider_rejected_input") {
+              await recordUsage(res, "source_verify_provider_rejected_input");
+              const left2 = cfg.deadlineMs - (now() - started) - VERIFY_SAVE_MARGIN_MS;
+              res = left2 >= MIN_TIME_FOR_SOURCE_VERIFY_MS ? await ask(false, left2) : null;
+            }
+            const parsed = res && res.ok ? parseModelJson(res.text) : null;
+            const checked = parsed && parsed.ok ? validateSourceReading(parsed.value, targets) : null;
+            if (res && res.ok && checked && checked.ok) {
+              await recordUsage(res, "source_verify_ok");
+              const applied = applySourceReading({ extracted, items, targets, byId: checked.byId, readings: allReadings.map((m) => m), checkCfg, now: new Date(now()) });
+              extracted = applied.extracted;
+              items = applied.items;
+              sourceFlags.push(...applied.flags);
+              sourceSummary = applied.summary;
+              log("extraction_source_verify", { jobId: ctx.jobId, suspicious: targets.length, confirmed: applied.summary.confirmed, corrected: applied.summary.corrected, unresolved: applied.summary.unresolved, rejected: checked.rejected });
+            } else {
+              if (res) await recordUsage(res, res.ok ? "source_verify_invalid_output" : `source_verify_${res.code}`);
+              log("extraction_source_verify_unavailable", { jobId: ctx.jobId, code: res ? (res.ok ? "invalid_model_output" : res.code) : "no_response" });
+              sourceSummary = unavailableSummary("unavailable", targets);
+              sourceFlags.push({ code: "source_verify_unavailable", severity: "info", message: "The check of suspicious values against the original document could not run. Compare the flagged values with the original." });
+            }
+          }
+        }
+      } catch {
+        // Nothing above is committed before the apply step succeeds (it works on copies), so the values are unchanged here.
+        log("extraction_source_verify_error", { jobId: ctx.jobId });
+        sourceFlags.push({ code: "source_verify_unavailable", severity: "info", message: "The check of suspicious values against the original document could not run. Compare the flagged values with the original." });
+      }
     }
 
     // Foreign currency (import / cross-border) invoice: a printed exchange rate is kept and cross-checked; when none is printed the
@@ -516,12 +582,12 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
         }
       }
     }
-    const flags: ReviewFlag[] = [...extracted.review_flags, ...runChecks(extracted, items, checkCfg), ...recheckNotes, ...rowFlags, ...lineFixFlags, ...forexFlags];
+    const flags: ReviewFlag[] = [...extracted.review_flags, ...runChecks(extracted, items, checkCfg), ...recheckNotes, ...rowFlags, ...lineFixFlags, ...sourceFlags, ...forexFlags];
 
     // GST validation engine verdict: saved with the invoice. A difference of up to INR 2.00 between the calculated and the
     // printed grand total is recorded as round_off_amount (source "computed"), so the original figures are never changed.
     const gstVerdict = validateInvoice({ extracted, items }, { tolerancePaise: checkCfg.tolerancePaise });
-    extracted.validation_summary = { ...(gstVerdict.summary as unknown as Record<string, unknown>), ...(totalSummary(verdict, layerCount)), ...(forex && forex.summary ? { forex: forex.summary } : {}) };
+    extracted.validation_summary = { ...(gstVerdict.summary as unknown as Record<string, unknown>), ...(totalSummary(verdict, layerCount)), ...(forex && forex.summary ? { forex: forex.summary } : {}), ...(sourceSummary ? { source_verification: sourceSummary } : {}) };
     if (gstVerdict.patch.round_off_amount !== undefined) {
       extracted.round_off_amount = Math.round(gstVerdict.patch.round_off_amount * 100) / 100;
       extracted.field_status.round_off_amount = { state: "value", confidence: 1, source: "computed" };

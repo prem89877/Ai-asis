@@ -116,7 +116,8 @@ export interface FieldMeta {
   // value; "human" = a reviewer typed or corrected it. Optional, so older records stay valid.
   // "computed" = derived by the validation engine (for example a round-off that absorbs a rounding difference).
   // "fetched" = not on the document: looked up from a public exchange rate source for the invoice date (forex.ts).
-  source?: "recheck" | "human" | "computed" | "fetched";
+  // "source_check" = re-read from the original file by the source-grounded verification (source-verify.ts) and proven by a rule.
+  source?: "recheck" | "human" | "computed" | "fetched" | "source_check";
   // Set when the GSTIN check digit was fixed automatically. `from` = the raw extracted GSTIN, `to` = the validated one.
   // Kept so the review screen can toggle between them and the audit trail never loses the original.
   autoCorrected?: { from: string; to: string };
