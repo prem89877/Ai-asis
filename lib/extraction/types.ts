@@ -118,9 +118,14 @@ export interface FieldMeta {
   // "fetched" = not on the document: looked up from a public exchange rate source for the invoice date (forex.ts).
   // "source_check" = re-read from the original file by the source-grounded verification (source-verify.ts) and proven by a rule.
   source?: "recheck" | "human" | "computed" | "fetched" | "source_check";
-  // Set when the GSTIN check digit was fixed automatically. `from` = the raw extracted GSTIN, `to` = the validated one.
-  // Kept so the review screen can toggle between them and the audit trail never loses the original.
+  // Set when a value was replaced by evidence from the document (source re-read, or a line-item fix). `from` = the value read
+  // first, `to` = the one now saved. Kept so the review screen can toggle between them and the audit trail never loses the original.
+  // Normalization never sets this for a GSTIN: a failing GSTIN is kept as read.
   autoCorrected?: { from: string; to: string };
+  // GSTIN fields: the exact extracted value (upper-cased, spaces removed) and what the format / check digit test said about it.
+  // Stored separately from the saved value so the raw GSTIN is always available. "valid" is NOT proof that the GSTIN exists.
+  rawValue?: string;
+  gstinCheck?: "valid" | "format_invalid" | "checksum_failed";
 }
 
 export type FlagSeverity = "error" | "warning" | "info";

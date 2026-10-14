@@ -106,7 +106,14 @@ export function voteGstin(values: string[]): GstinVote {
 
   // 1. Whole values: exactly one distinct value passes layout + check digit.
   const valid = distinct.filter(gstinIsValid);
-  if (valid.length === 1) return { value: valid[0], status: "checksum_pick", distinct, corrected: false };
+  if (valid.length === 1) {
+    // A check digit that passes is not proof by itself. If more readings of the document agree on a different value, that value
+    // is what the document most likely prints (it may be a print error), so nothing is picked and the first reading stays.
+    const votes = tally.get(valid[0]) ?? 0;
+    const rivalVotes = Math.max(...distinct.filter((v) => v !== valid[0]).map((v) => tally.get(v) ?? 0));
+    if (rivalVotes > votes) return { value: null, status: "conflict", distinct, corrected: false };
+    return { value: valid[0], status: "checksum_pick", distinct, corrected: false };
+  }
   if (valid.length > 1) {
     // Two different VALID numbers (e.g. supplier and buyer mixed up). Only a strict majority decides.
     const top = tally.get(valid[0]) ?? 0;
@@ -344,23 +351,26 @@ export function resolveParties(readings: ModelOutput[], parties: PartiesReading[
     const old = out[key];
     const before = present(old) ? normGstin(old.value) : null;
     if (before === vote.value) return;
+    // A GSTIN that no reading produced as a whole (character vote / search) is a guess built from pieces. It is never saved: the
+    // first reading stays exactly as read and the assembled number is only offered to the reviewer in a warning.
+    if (vote.corrected || vote.status === "char_vote" || vote.status === "char_search") {
+      flags.push({
+        code: "gstin_char_proposed", severity: "warning", field: key,
+        message: `No reading gave this GSTIN as a whole, so it was not applied. A possible value built from the characters the readings agree on is ${vote.value}. Compare it with the original.`,
+        details: { proposed: vote.value, kept: before, read_as: vote.distinct, method: vote.status },
+      });
+      return;
+    }
     // Confidence of the new value = the lowest confidence among the readings that gave exactly this value (never raised).
     const confs = [...readings.map((r) => r[key]), ...parties.map((p) => p[key])].filter(present).filter((f) => normGstin(f.value) === vote.value).map((f) => f.confidence);
     const confidence = confs.length ? Math.min(...confs) : Math.min(old.confidence, 0.6);
     out[key] = { status: "present", value: vote.value, confidence };
     changed.push(key);
-    if (!(vote.corrected || vote.status === "char_vote" || vote.status === "char_search") && before !== null) {
+    if (before !== null) {
       flags.push({
         code: "gstin_vote_corrected", severity: "info", field: key,
         message: "The GSTIN of the first pass was replaced by the value the other readings and the printed evidence support (valid layout and check digit).",
         details: { from: before, to: vote.value, method: vote.status, read_as: vote.distinct },
-      });
-    }
-    if (vote.corrected || vote.status === "char_vote" || vote.status === "char_search") {
-      flags.push({
-        code: "gstin_char_voted", severity: "info", field: key,
-        message: "No single reading had this GSTIN right. It was assembled from the characters the readings agree on, and it passes the GSTIN layout and check digit.",
-        details: { chosen: vote.value, read_as: vote.distinct, method: vote.status },
       });
     }
   };

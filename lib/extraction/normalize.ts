@@ -1,7 +1,7 @@
 // Turns validated model output into the shapes stored in the database.
 // Normalization only trims text, upper-cases GSTINs and checks formats. It never changes an amount.
 // Anything that cannot be stored safely becomes null with state "invalid" and a review flag.
-import { GSTIN_AUTO_CORRECTED_LABEL, suggestGstinFixes, suggestionText, validateAndRepairGSTIN } from "./gstin.ts";
+import { suggestGstinFixes, suggestionText } from "./gstin.ts";
 import { cleanIdentifier } from "./identifiers.ts";
 import { HEADER_AMOUNT_FIELDS, HEADER_TEXT_FIELDS } from "./types.ts";
 import type { StoredItem as StoredItemType } from "./types.ts";
@@ -143,8 +143,7 @@ export interface NormalizeOptions {
   // Header fields (model names, e.g. "supplier_gstin") where two separate readings of the document gave
   // the same value. Such a value is stored with source "recheck".
   agreed?: ReadonlySet<string>;
-  // Fix a wrong GSTIN check digit (15th character) automatically when two readings agree with high confidence.
-  // Default true. The raw value is always kept in the field status and in a "gstin_auto_corrected" audit flag.
+  // Kept only so older callers still compile. A GSTIN is never replaced by normalization, whatever this says.
   gstinAutoCorrect?: boolean;
 }
 
@@ -260,22 +259,10 @@ export function normalizeExtraction(model: ModelOutput, opts: NormalizeOptions):
     const g = raw.replace(/\s+/g, "").toUpperCase();
     text[key] = g;
     const check = checkGstin(g);
-    if (!check.ok && check.reason === "checksum" && (opts.gstinAutoCorrect ?? true)) {
-      const trusted = (opts.agreed?.has(key) ?? false) && model[key].confidence > GSTIN_PRINT_ERROR_CONFIDENCE;
-      const fix = validateAndRepairGSTIN(g, { allowRepair: trusted });
-      if (fix.auto_corrected) {
-        text[key] = fix.gstin;
-        c.status[key] = { ...c.status[key], autoCorrected: { from: fix.original_raw_gstin, to: fix.gstin } };
-        c.flags.push({
-          code: "gstin_auto_corrected",
-          severity: "info",
-          field: key,
-          message: GSTIN_AUTO_CORRECTED_LABEL,
-          details: { gstin_auto_corrected: true, original_raw_gstin: fix.original_raw_gstin, corrected_gstin: fix.gstin, corrected_char: fix.corrected_char },
-        });
-        continue;
-      }
-    }
+    // The raw reading is kept as the saved value and also recorded on its own, so no later step can lose it. A failing GSTIN is
+    // never replaced here: a check digit that fails may be printed that way on the invoice. Possible corrections are only
+    // listed in the flag (details.suggestions); they are applied only when a reviewer types them or a source re-read proves them.
+    c.status[key] = { ...c.status[key], rawValue: g, gstinCheck: check.ok ? "valid" : check.reason === "checksum" ? "checksum_failed" : "format_invalid" };
     if (!check.ok) {
       const confirmed = check.reason === "checksum" && (opts.agreed?.has(key) ?? false) && model[key].confidence > GSTIN_PRINT_ERROR_CONFIDENCE;
       const text = check.reason === "format" ? { severity: "warning" as const, message: "This is not a valid GSTIN format. Check the original." } : gstinChecksumFlagText(confirmed);
