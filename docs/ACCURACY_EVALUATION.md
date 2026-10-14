@@ -1,0 +1,90 @@
+# Accuracy evaluation and final integration check (Parts 1 to 3)
+
+Scope: dynamic prompt engine (Part 1), structured extraction (Part 2), source-grounded second verification (Part 3), working together in
+`lib/extraction/pipeline.ts`. **No application code was changed.** This part adds tests, an evaluation script and this report.
+
+## Read this first: what was and was not measured
+| | Status |
+|---|---|
+| Pipeline logic end to end with a scripted provider (33 invoices, 622 tests) | **Run, results below** |
+| Baseline vs updated on the same dataset, scripted provider | **Run, results below. Not real-world accuracy** |
+| Real Gemini accuracy, latency and cost | **NOT measured** (no network / API key in the build environment). `npm run eval:pipeline -- --mode live` exists for it and was only smoke-tested without network |
+| Effect of the dynamic prompt on real extraction quality | **NOT measured.** A scripted model cannot react to a prompt. Only the prompt text and its safety were tested |
+| `tsc`, `next lint`, `next build`, Supabase SQL tests, Vercel deploy | **NOT run** (no `node_modules`, no network). Run them before deploying |
+
+The "model" in the simulated evaluation is hand-written: I chose which values it misreads. The numbers show what the code does with such
+readings (does it fix proven errors, does it refuse unproven ones, does it flag the rest). They do not say how often Gemini errs, so no
+accuracy improvement for real invoices is claimed.
+
+## Files
+New: `tests/e2e-accuracy.test.mjs`, `tests/helpers/pipeline-harness.mjs`, `tests/helpers/invoice-builder.mjs`, `tests/helpers/oracle.mjs`,
+`tests/helpers/eval-dataset.mjs`, `scripts/eval-pipeline.mjs`, `docs/ACCURACY_EVALUATION.md`.
+Modified: `package.json` (script `eval:pipeline`), `README.md` (one section).
+
+## Commands and actual results
+```
+npm test                    # 622 tests, 622 pass, 0 fail (baseline before this part: 596 pass; +26 new)
+npm run eval:pipeline       # simulated, deterministic (two runs gave identical output)
+GEMINI_API_KEY=... npm run eval:pipeline -- --mode live --runs 3     # real measurement, costs money. NOT run here
+```
+
+## Simulated baseline vs updated (33 invoices, scripted readings)
+Same dataset for each column. `baseline` = all layers that existed before Part 1 and Part 3 (second / audit / key-figures / parties readings,
+vote, line fix) with `EXTRACTION_DYNAMIC_PROMPT=off` and `EXTRACTION_SOURCE_VERIFY=off`. `updated` = current defaults.
+
+| Measure | first reading only | baseline | updated |
+|---|---|---|---|
+| Field exact match | 1251/1274 | 1252/1274 | 1265/1274 |
+| Critical financial fields (taxable, CGST, SGST, IGST, cess, grand total, line taxable) | 300/314 | 301/314 | 308/314 |
+| Line-item values (qty, price, taxable, rate) | 460/464 | 460/464 | 464/464 |
+| Line-item count correct | 33/33 | 33/33 | 33/33 |
+| Fields changed to the truth by the layers | 0 | 1 | 14 |
+| **False corrections** (changed and now wrong) | 0 | 0 | 0 |
+| Invoices sent to review | 26/33 | 26/33 | 15/33 |
+| **Silent errors** (a critical field wrong and not flagged) | 0 | 0 | 0 |
+| Unresolved source-check flags | 0 | 0 | 13 |
+| Provider calls per invoice | 1.00 | 5.00 | 5.73 |
+| Code time per invoice (no network, NOT latency) | 1.6 ms | 2.6 ms | 4.7 ms |
+| Cost per invoice | not measured | not measured | not measured |
+
+Reading the table: 13 of the 33 scenarios were built with an error that every earlier layer repeats, so the improvement here is by
+construction. The meaningful results are the zeros: no value was made wrong, and every one of the 9 fields still wrong in `updated` sits on an
+invoice that was sent to review. The extra provider call happens only for invoices with suspicious values (0.73 extra calls per invoice on this
+dataset, which is mostly suspicious by design; real clean invoices cost no extra call). Real latency and dollar cost need the live mode.
+
+The 9 fields still wrong in `updated`, all flagged: supplier GSTIN missing (not re-read), invoice number missing (proposal only), unreadable
+total (proposal only), and six cases where the scripted re-read was unreadable / ambiguous / wrong / malformed / failed.
+
+## What the tests cover (`tests/e2e-accuracy.test.mjs`)
+Full workflow (upload bytes, dynamic prompt, parse, validate, suspicious fields, source re-read, correction, saved record, review-form column
+mapping, CSV / XLSX / Tally) for: clear intra-state, inter-state IGST and cess invoices; blurry / low-confidence / PNG photo; similar digits and
+decimal errors (total, unit price, quantity); wrong, missing and re-read GSTINs; CGST/SGST vs IGST; wrong taxable value and total; 12-row
+3-page invoice; legitimate repeated rows vs a block repeated by page overlap; missing and ambiguous fields; confident-but-wrong re-reads
+(false-correction safety); malformed JSON, schema-invalid output, 429 retry, permanent rejection, timeouts, every extra layer failing or throwing,
+a throwing prompt engine. Regression and safety: defaults and off-switches, `.env.example` covers every variable `config.ts` reads, no new
+`NEXT_PUBLIC_` variable, no server secret in any `"use client"` file, no `process.env` in the new modules, logs and usage records contain no
+key / invoice number / GSTIN / name / amount. The existing 596 tests (routes, auth guards, upload, billing, export, Tally, sync) still pass.
+
+## Findings (not changed: outside Parts 1 to 3 or a deliberate design choice)
+1. **IGST on a same-state invoice is saved as `completed` with no flag.** The rule `gst_type_mismatch` lives in `lib/review/gst.ts` and runs on
+   the review screen when the record is evaluated, not in the extraction pipeline. The test records this behaviour. This predates Parts 1 to 3.
+2. **A corrected GSTIN still goes to review.** The earlier `invalid_gstin` warning is not removed after Part 3 corrects the value, and its text
+   suggests the GSTIN that is now saved. Conservative, but confusing. Removing it is a policy decision.
+3. A **missing supplier GSTIN is not re-read** (only required fields are). It is flagged `missing_field` (warning) for a person.
+4. An **unreadable or missing grand total is never filled** by the source re-read, only proposed. The note text then says "arithmetic already
+   ties", which is misleading for a null total (cosmetic).
+5. Tally: comments in `lib/export/profiles.ts` and `lib/tally/build.ts` say the route is off unless `TALLY_EXPORT_ENABLED=true`, but the route
+   and `.env.example` make it **on by default** (off only with `false`). Confirm which is intended.
+6. `mediaResolution: HIGH` for the source re-read is untested against live Gemini (Part 3 already noted this).
+
+## Environment variables
+No change. Existing optional switches: `EXTRACTION_DYNAMIC_PROMPT`, `EXTRACTION_SOURCE_VERIFY` (needs `EXTRACTION_VERIFY` on). Defaults unchanged (on).
+
+## Safe deployment on Vercel
+1. Locally with network: `npm ci && npm run typecheck && npm run lint && npm test && npm run build`.
+2. Deploy to a **Preview** first. Confirm `GEMINI_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY` are server-only, `BILLING_ALLOW_UNPAID_UPGRADES` is unset.
+3. Before Production, run `GEMINI_API_KEY=... npm run eval:pipeline -- --mode live --runs 3` and keep the output: it gives the first trustworthy
+   baseline (6 synthetic fixtures; add real, anonymised invoices with `*.truth.json` for a better one). Check false corrections stay 0.
+4. Check cost and time on that run: the route limit is `maxDuration = 60` s, `EXTRACTION_DEADLINE_MS` default 52000.
+5. Rollback without code change: set `EXTRACTION_SOURCE_VERIFY=off` and/or `EXTRACTION_DYNAMIC_PROMPT=off` in Vercel, then redeploy (env changes
+   apply to new deployments). No migration is needed for this part.
