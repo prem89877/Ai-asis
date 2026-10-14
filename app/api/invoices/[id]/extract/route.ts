@@ -4,12 +4,13 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getPrimaryMembership } from "@/lib/auth/session";
 import { isSameOrigin } from "@/lib/security/origin";
 import { UUID_RE } from "@/lib/invoices/validation";
-import { getCheckConfig, getGeminiConfig, getLimits } from "@/lib/extraction/config";
+import { getCheckConfig, getFxConfig, getGeminiConfig, getLimits } from "@/lib/extraction/config";
+import { createFxLookup } from "@/lib/extraction/fx-rates";
 import { userMessage } from "@/lib/extraction/errors";
 import { callGemini } from "@/lib/extraction/gemini";
 import { createGstPortalLookup } from "@/lib/extraction/gst-portal";
 import { runExtraction } from "@/lib/extraction/pipeline";
-import { createSupabaseFiles, createSupabaseStore } from "@/lib/extraction/store";
+import { createSupabaseFiles, createSupabaseFxCache, createSupabaseStore } from "@/lib/extraction/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,6 +49,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
   const geminiConfig = getGeminiConfig();
   if (!admin || !geminiConfig) return json({ error: "AI extraction is not configured on this server." }, 503);
   const limits = getLimits();
+  const fxConfig = getFxConfig();
 
   try {
     const { data, error } = await admin.rpc("claim_extraction_job", {
@@ -84,6 +86,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
         geminiConfig,
         checkConfig: getCheckConfig(),
         gstPortal: createGstPortalLookup(),
+        fx: fxConfig.enabled ? createFxLookup({ cache: createSupabaseFxCache(admin), timeoutMs: fxConfig.timeoutMs }) : null,
         maxPdfPages: limits.maxPdfPages,
       },
       {
