@@ -226,7 +226,7 @@ export function assessSupplier(record: GstRecord, e: Pick<StoredExtracted, "vend
   }
 
   // Composition taxpayers cannot collect GST from the buyer.
-  const taxed = [e.cgst_amount, e.sgst_amount, e.utgst_amount, e.igst_amount].some((v) => v !== null && v > 0);
+  const taxed = [e.cgst_amount, e.sgst_amount, e.utgst_amount, e.igst_amount].some((v) => (v ?? 0) > 0);
   if (record.taxpayerType && /composition/i.test(record.taxpayerType) && taxed && e.document_type === "tax_invoice") {
     flags.push({
       code: "composition_charging_tax", severity: "warning", ...base,
