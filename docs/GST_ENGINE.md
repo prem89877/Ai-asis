@@ -108,3 +108,18 @@ Every finding states the field, the expected value, the observed value and the r
 * A printed net payable that is lower than the grand total by exactly the printed commercial discount is explained by the discount. It is no longer reported as a missing TDS (`net_payable_tds_not_found`).
 * A TCS or TDS figure identical to the printed discount raises `tcs_matches_discount` / `tds_matches_discount`; both values stay as read.
 * Tally: a gap between taxable + taxes and the printed total that equals the printed discount is booked to the `discountLedger` ("Discount Received", credit) instead of skipping the invoice. TCS is still not booked (the export view does not carry `tcs_amount`), so such an invoice is skipped with the usual "does not add up" reason.
+
+## Part 2: commercial discount, review screen and exports (migration 015)
+
+* **Review screen (`lib/review/draft-check.ts`).** While a reviewer edits, "taxable + taxes" is compared with the typed total. A total equal to
+  taxable + taxes **minus the typed discount** is now accepted too, so the subtotal 547,700 and the net payable 545,000 both pass without a false
+  warning. A total neither figure explains is still warned about. The discount is never used as TCS / TDS.
+* **Exports.** `invoice_review_list` now also exposes `tcs_amount`, `tds_amount`, `round_off_amount`, `net_payable_amount` (migration
+  `015_export_adjustments.sql`). New opt-in export columns: TCS, TDS, Round Off, Net Payable (default columns are unchanged). NULL = not printed
+  and stays empty; a printed 0 stays 0.
+* **Deployment order.** 1) Run migration 015 in the Supabase SQL editor. 2) Deploy the app. The export, Tally and integration-sync routes select the four
+  new columns, so deploying first would make those routes fail until the migration is run. No new Vercel environment variables.
+* **Preserves old data.** Nothing is altered or deleted: `CREATE OR REPLACE VIEW` keeps every existing column and appends the new ones at the end.
+  Rollback = re-run the view from `014_utgst.sql`.
+* **Known limitation.** Tally still does not book TCS (it has no TCS ledger), so an invoice whose total includes TCS is skipped with the usual
+  "does not add up" message rather than being booked wrongly.
