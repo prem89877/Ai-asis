@@ -73,7 +73,7 @@ export function getLimits(env: Env = process.env): ExtractionLimits {
     maxConcurrent: int(env, "EXTRACTION_MAX_CONCURRENT", 3, 1, 50),
     maxRunsPerInvoice: int(env, "EXTRACTION_MAX_RUNS_PER_INVOICE", 3, 1, 20),
     uploadsPerDay: int(env, "EXTRACTION_UPLOADS_PER_DAY", 300, 1, 100_000),
-    staleSeconds: int(env, "EXTRACTION_STALE_SECONDS", 180, 60, 3600),
+    staleSeconds: int(env, "EXTRACTION_STALE_SECONDS", 240, 60, 3600),
     maxPdfPages: int(env, "EXTRACTION_MAX_PDF_PAGES", 10, 1, 100),
   };
 }
@@ -93,7 +93,7 @@ export function getGeminiConfig(env: Env = process.env): GeminiConfig | null {
     inputPricePerMTok: num(env, "GEMINI_INPUT_PRICE_PER_MTOK", DEFAULT_INPUT_PRICE, 0, 1000),
     outputPricePerMTok: num(env, "GEMINI_OUTPUT_PRICE_PER_MTOK", DEFAULT_OUTPUT_PRICE, 0, 1000),
     timeoutMs: int(env, "GEMINI_TIMEOUT_MS", 40_000, 5_000, 120_000),
-    deadlineMs: int(env, "EXTRACTION_DEADLINE_MS", 52_000, 10_000, 280_000),
+    deadlineMs: int(env, "EXTRACTION_DEADLINE_MS", 150_000, 10_000, 280_000),
     maxAttempts: int(env, "EXTRACTION_MAX_ATTEMPTS", 3, 1, 5),
     maxOutputTokens: int(env, "GEMINI_MAX_OUTPUT_TOKENS", 32_768, 1_024, 65_536),
     verify: switchedOn(env.EXTRACTION_VERIFY),

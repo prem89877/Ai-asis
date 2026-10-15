@@ -84,7 +84,7 @@ const HEADER: Record<string, HeaderDef> = {
   sgst: { kind: "amount", label: "SGST", where: "invoice-level total SGST (State GST) amount. UTGST is a separate figure and is NOT part of it", stored: "sgst_amount" },
   utgst_amount: { kind: "amount", label: "UTGST", where: "invoice-level total UTGST (Union Territory GST) amount, a separate figure from SGST", stored: "utgst_amount" },
   igst: { kind: "amount", label: "IGST", where: "invoice-level total IGST amount", stored: "igst_amount" },
-  cess: { kind: "amount", label: "cess", where: "invoice-level total cess amount", stored: "cess_amount" },
+  cess: { kind: "amount", label: "cess", where: "invoice-level total cess amount (Compensation Cess / Cess, usually in the totals box). If no cess total is printed, answer missing", stored: "cess_amount" },
   grand_total: { kind: "amount", label: "grand total", where: "the invoice grand total BEFORE any TDS deduction", stored: "total_amount" },
 };
 const REQUIRED_HEADER = new Set(["invoice_number", "invoice_date", "grand_total"]);
@@ -114,6 +114,9 @@ export interface DetectInput {
 function supplierGstinExpected(e: StoredExtracted): boolean {
   return e.document_type === "tax_invoice" || [e.cgst_amount, e.sgst_amount, e.utgst_amount, e.igst_amount].some((v) => v !== null && v !== undefined && v !== 0);
 }
+
+// Findings of the tax-head checks (gst-engine.ts / tax-reconcile.ts): a head of the invoice that its lines do not reproduce.
+const TAX_BREAKDOWN_CODES = new Set(["tax_allocation_mismatch", "tax_component_mismatch"]);
 
 const arithmeticFlags = (flags: ReviewFlag[]) => flags.filter((f) => f.code.startsWith("arithmetic_") && (f.severity === "error" || f.severity === "warning"));
 
@@ -182,6 +185,17 @@ export function detectSuspicious(inp: DetectInput): Target[] {
     } else if (f.itemPosition) {
       for (const k of ["gst_rate", "tax_amount", "taxable_value", "line_total"]) add("item", k, f.message.slice(0, 120), f.itemPosition);
     }
+  }
+
+  // Tax breakdown that the lines do not reproduce (a head of the invoice differs from the lines of its family) or a total that does not add
+  // up. The usual cause is a cess that was not read at all (null), read as 0 or misread: the tax printed on the lines then holds
+  // GST + cess while the invoice heads hold GST only, so e.g. "IGST expected 212000, found 182000". A missing cess is normal on most
+  // invoices, which is why it is never re-read by default; here the invoice itself shows that something is off, so the cess and every
+  // tax head that exists is re-read from the original file, whatever state the first reading left them in.
+  const taxOff = flags.some((f) => (f.severity === "error" || f.severity === "warning") && (TAX_BREAKDOWN_CODES.has(f.code) || f.code === "arithmetic_total_mismatch"));
+  if (taxOff) {
+    add("header", "cess", "the tax of the item lines or the invoice total does not match the tax heads; a cess may not have been read");
+    for (const k of ["igst", "cgst", "sgst", "utgst_amount"]) if ((e[HEADER[k].stored] ?? null) !== null) add("header", k, "the tax of the item lines does not match this tax head");
   }
 
   // Items: readability, confidence, unusual GST rate.
@@ -361,6 +375,10 @@ export interface ApplyResult {
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 const problems = (e: StoredExtracted, items: StoredItem[], tol: number) => arithmeticFlags(validateInvoice({ extracted: e, items }, { tolerancePaise: tol }).flags).length;
+// Same count plus the tax-breakdown findings. Used ONLY to judge a re-read cess: a cess that was not read leaves the lines (GST + cess)
+// and the invoice heads (GST) apart, so the proof that the re-read cess is right is that this count goes down (to 0 when it is exact).
+const taxProblems = (e: StoredExtracted, items: StoredItem[], tol: number) =>
+  validateInvoice({ extracted: e, items }, { tolerancePaise: tol }).flags.filter((f) => (f.severity === "error" || f.severity === "warning") && (f.code.startsWith("arithmetic_") || TAX_BREAKDOWN_CODES.has(f.code))).length;
 
 function savedValue(e: StoredExtracted, items: StoredItem[], t: Target): string | number | null {
   if (t.itemPosition) return (items[t.itemPosition - 1]?.[ITEM[t.field].stored] ?? null) as string | number | null;
@@ -466,11 +484,12 @@ export function applySourceReading(inp: ApplyInput): ApplyResult {
         else if (check === "failed") why = "the re-read grand total does not tie to the taxable value plus taxes of the invoice.";
         else why = "the taxable value and taxes needed to check the re-read grand total are not available.";
       } else {
-        const before = problems(e, items, tol);
+        const count = t.field === "cess" && !isItemField ? taxProblems : problems;
+        const before = count(e, items, tol);
         const trialE = clone(e);
         const trialItems = clone(items);
         setValue(trialE, trialItems, t, v, r.confidence, null);
-        const after = problems(trialE, trialItems, tol);
+        const after = count(trialE, trialItems, tol);
         const plausible = original === null || (typeof original === "number" && ocrPlausible(original, v));
         if (before === 0) why = original === null ? "the value was not read before and the invoice arithmetic has nothing to compare it with, so it is proposed for a person to confirm." : "the invoice arithmetic already ties, so there is nothing to prove the change.";
         else if (after >= before) why = "the re-read value does not make the invoice arithmetic better.";
