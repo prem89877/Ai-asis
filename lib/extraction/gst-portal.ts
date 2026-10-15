@@ -155,7 +155,7 @@ export interface PortalSummary {
 
 const dateText = (d: string) => d;
 
-export function assessSupplier(record: GstRecord, e: Pick<StoredExtracted, "vendor_name" | "invoice_date" | "cgst_amount" | "sgst_amount" | "igst_amount" | "document_type">): { flags: ReviewFlag[]; summary: PortalSummary } {
+export function assessSupplier(record: GstRecord, e: Pick<StoredExtracted, "vendor_name" | "invoice_date" | "cgst_amount" | "sgst_amount" | "utgst_amount" | "igst_amount" | "document_type">): { flags: ReviewFlag[]; summary: PortalSummary } {
   const flags: ReviewFlag[] = [];
   const inv = e.invoice_date;
   const f = "supplier_gstin";
@@ -226,7 +226,7 @@ export function assessSupplier(record: GstRecord, e: Pick<StoredExtracted, "vend
   }
 
   // Composition taxpayers cannot collect GST from the buyer.
-  const taxed = [e.cgst_amount, e.sgst_amount, e.igst_amount].some((v) => v !== null && v > 0);
+  const taxed = [e.cgst_amount, e.sgst_amount, e.utgst_amount, e.igst_amount].some((v) => v !== null && v > 0);
   if (record.taxpayerType && /composition/i.test(record.taxpayerType) && taxed && e.document_type === "tax_invoice") {
     flags.push({
       code: "composition_charging_tax", severity: "warning", ...base,

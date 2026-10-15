@@ -611,6 +611,16 @@ export function validateInvoice(data: InvoiceData, opts: EngineOptions): Invoice
   }
 
   const flags: ReviewFlag[] = [...lineFlags, ...totals.flags, ...alloc.flags, ...componentFlags, ...heads.flags, ...neg.flags, ...meta]; // the cross-check verdict is kept in the summary, not as a flag, so clean invoices stay flag-free
+  // The tax cross-check above only compares three ways of adding up the TAX. It must never read "verified" while another financial
+  // check of the same invoice failed: a wrong grand total, a wrong tax head or a wrong line must also downgrade it, whatever
+  // confidence the model reported. (Before this, an invoice with a 1,500 total instead of 1,180 still showed level "verified".)
+  const FINANCIAL_CODES = new Set(["tax_allocation_mismatch", "tax_component_mismatch", "cgst_sgst_unequal", "tax_head_mismatch"]);
+  const financialFailures = flags.filter((f) => (f.severity === "error" || f.severity === "warning") && (f.code.startsWith("arithmetic_") || FINANCIAL_CODES.has(f.code)));
+  if (totals.passed === false || financialFailures.length > 0) {
+    if (verification.level === "verified" || verification.level === "partial") verification.level = "unverified";
+    if (totals.passed === false && !verification.disagreeing.includes("grand_total")) verification.disagreeing.push("grand_total");
+    if (financialFailures.length > 0 && !verification.disagreeing.includes("financial_checks")) verification.disagreeing.push("financial_checks");
+  }
   const lineFails = lineFlags.filter((f) => f.code === "arithmetic_line_mismatch").length;
   const summary: ValidationSummary = {
     version: 1,
