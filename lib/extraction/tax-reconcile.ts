@@ -25,6 +25,7 @@ export interface ComponentFinding {
   observed: number; // INR
   difference: number; // INR, observed - expected
   reason: string;
+  lines?: { position: number; taxable: number | null; rate: number | null; tax: number }[]; // the lines behind an IGST figure (INR), so a reviewer sees each one
 }
 
 export interface ComponentReconciliation {
@@ -104,7 +105,12 @@ export function reconcileTaxComponents(e: StoredExtracted, items: StoredItem[], 
       const reason = split.igst === 0 ? "No line is charged IGST, but the invoice shows IGST."
         : H.igst === 0 ? `The ${out.basis === "labelled_lines" ? `${nIgst} IGST line(s)` : "item lines"} add up to ${inr(r2(split.igst))} of IGST, but no IGST was found at invoice level.`
         : `The ${out.basis === "labelled_lines" ? `${nIgst} IGST line(s)` : "item lines"} add up to ${inr(r2(split.igst))} of IGST.`;
-      out.heads.push(finding("igst_mismatch", "igst", "IGST", split.igst, H.igst, reason));
+      const f0 = finding("igst_mismatch", "igst", "IGST", split.igst, H.igst, reason);
+      if (out.basis === "labelled_lines") {
+        f0.lines = items.map((it, i) => ({ it, i })).filter(({ it }) => it.applied_tax_type === "IGST")
+          .map(({ it, i }) => ({ position: i + 1, taxable: has(it.taxable_amount) ? it.taxable_amount : null, rate: has(it.gst_rate) ? it.gst_rate : null, tax: r2(taxes[i] as number) }));
+      }
+      out.heads.push(f0);
     }
 
     // CGST: the aggregate over both the intra-state and the Union Territory lines
@@ -172,7 +178,7 @@ export function componentFlag(code: string, findings: ComponentFinding[], extra:
     message: `${parts.join(" ")} Check the original.`,
     details: {
       ...extra,
-      components: findings.map((f) => ({ field: f.field, label: f.label, expected: f.expected, observed: f.observed, difference: f.difference, reason: f.reason, diagnosis: f.code })),
+      components: findings.map((f) => ({ field: f.field, label: f.label, expected: f.expected, observed: f.observed, difference: f.difference, reason: f.reason, diagnosis: f.code, ...(f.lines ? { lines: f.lines } : {}) })),
     },
   };
 }

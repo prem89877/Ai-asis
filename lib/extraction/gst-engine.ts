@@ -528,10 +528,12 @@ export function tripleCheckTax(e: StoredExtracted, items: StoredItem[], toleranc
   }
   const disagreeing: string[] = [];
   const cessP = p(e.cess_amount);
+  const noCess = items.every((it) => has(it.gst_amount)) ? removeCessFromLineTaxes(e, items, items.map((it) => p(it.gst_amount)), tol) : null;
   for (const m of methods.slice(1)) {
     let v = toPaise(m.value);
     // A line-derived total that equals GST + cess is the cess-inclusive pattern (see tax-components.ts): compare it without the cess.
-    if (isCessInclusiveLineTotal(e, items, v, tol)) { v -= cessP; m.value = v / 100; m.label += ` (cess INR ${(cessP / 100).toFixed(2)} excluded)`; }
+    if (m.id === "printed_line_tax" && noCess) { v = noCess.taxes.reduce<number>((a, t) => a + (t ?? 0), 0); m.value = v / 100; m.label += ` (cess INR ${(cessP / 100).toFixed(2)} excluded)`; }
+    else if (m.id !== "printed_line_tax" && isCessInclusiveLineTotal(e, items, v, tol)) { v -= cessP; m.value = v / 100; m.label += ` (cess INR ${(cessP / 100).toFixed(2)} excluded)`; }
     if (Math.abs(v - header) > tol) disagreeing.push(m.id);
   }
 

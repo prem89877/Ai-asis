@@ -122,22 +122,48 @@ export function isCessInclusiveLineTotal(e: HeadsLike, items: LineLike[], lineTa
 }
 
 // Line taxes (paise) without the cess, or null when the lines do not show that pattern. Order and NONE lines are kept; the cess is
-// taken out in proportion to each taxed line and the rounding residue goes to the last taxed line, so the lines still add up exactly.
+// taken out in proportion to each affected line and the rounding residue goes to the last one, so the lines still add up exactly.
+// Two cases, both needing exact evidence:
+//   1. one tax family on the invoice (see isCessInclusiveLineTotal);
+//   2. several families (e.g. IGST lines + CGST/SGST lines): the lines of EVERY family must reproduce their invoice head, except exactly
+//      one family whose lines are higher by exactly the printed cess. Only that family's lines carry the cess. If the cess is spread over
+//      several families, or the difference is anything else, nothing is adjusted and the mismatch stays visible.
 export function removeCessFromLineTaxes(e: HeadsLike, items: LineLike[], taxes: (number | null)[], tolPaise: number): { taxes: (number | null)[]; cess: number } | null {
   if (items.length === 0 || taxes.some((t) => t === null || t === undefined)) return null;
+  const H = taxHeadsPaise(e);
+  if (H.cess <= tolPaise) return null;
   const idx = items.map((_, i) => i).filter((i) => items[i].applied_tax_type !== "NONE" && (taxes[i] as number) !== 0);
   const total = idx.reduce((a, i) => a + (taxes[i] as number), 0);
-  if (!isCessInclusiveLineTotal(e, items, total, tolPaise)) return null;
-  const cess = taxHeadsPaise(e).cess;
-  const target = total - cess;
-  const out = [...taxes];
-  let used = 0;
-  idx.forEach((i, n) => {
-    const v = n === idx.length - 1 ? target - used : Math.round(((taxes[i] as number) * target) / total);
-    out[i] = v;
-    used += v;
-  });
-  return { taxes: out, cess };
+  const strip = (lines: number[], sum: number): (number | null)[] => {
+    const target = sum - H.cess;
+    const out = [...taxes];
+    let used = 0;
+    lines.forEach((i, n) => {
+      const v = n === lines.length - 1 ? target - used : Math.round(((taxes[i] as number) * target) / sum);
+      out[i] = v;
+      used += v;
+    });
+    return out;
+  };
+  if (isCessInclusiveLineTotal(e, items, total, tolPaise)) return { taxes: strip(idx, total), cess: H.cess };
+
+  // Several families: the lines must all be labelled and the grand sum must be GST + cess.
+  const gst = totalGstPaise(H);
+  if (gst <= 0 || Math.abs(total - (gst + H.cess)) > tolPaise) return null;
+  const FAMILIES = ["IGST", "CGST_SGST", "CGST_UTGST"] as const;
+  if (idx.some((i) => !(FAMILIES as readonly string[]).includes(String(items[i].applied_tax_type)))) return null;
+  const present = FAMILIES.filter((fam) => idx.some((i) => items[i].applied_tax_type === fam));
+  if (present.length < 2) return null;
+  if (present.includes("CGST_UTGST") && !known(e.utgst_amount)) return null; // legacy rows keep the state tax in SGST: head per family unknown
+  // What each family's lines should add up to, from the invoice heads (SGST / UTGST are each half of their family's tax).
+  const expected: Record<string, number> = { IGST: H.igst, CGST_SGST: 2 * H.sgst, CGST_UTGST: 2 * H.utgst };
+  const sums: Record<string, number> = {};
+  for (const fam of present) sums[fam] = idx.filter((i) => items[i].applied_tax_type === fam).reduce((a, i) => a + (taxes[i] as number), 0);
+  const off = present.filter((fam) => Math.abs(sums[fam] - expected[fam]) > tolPaise);
+  if (off.length !== 1) return null;
+  const fam = off[0];
+  if (Math.abs(sums[fam] - expected[fam] - H.cess) > tolPaise) return null;
+  return { taxes: strip(idx.filter((i) => items[i].applied_tax_type === fam), sums[fam]), cess: H.cess };
 }
 
 // ---- Reconciliation ----------------------------------------------------------------------------------------------------
