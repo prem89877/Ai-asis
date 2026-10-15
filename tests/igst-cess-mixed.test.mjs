@@ -72,3 +72,38 @@ test("helper: single-family, no-cess and UTGST-legacy inputs are left alone", ()
   assert.equal(removeCessFromLineTaxes(e, items, [212000, 18000], 200), null, "UT lines but no utgst_amount stored: per-family heads unknown");
   assert.equal(removeCessFromLineTaxes({ ...e, cess_amount: null }, [{ applied_tax_type: "IGST" }, { applied_tax_type: "CGST_SGST" }], [212000, 18000], 200), null);
 });
+
+// ---- Robustness: situations where nothing is adjusted must never throw and never produce NaN / Infinity -----------------------------
+const finite = (o) => { const bad = []; const w = (x, p) => { if (typeof x === "number" && !Number.isFinite(x)) bad.push(p); else if (x && typeof x === "object") for (const k in x) w(x[k], `${p}.${k}`); }; w(o, ""); return bad; };
+
+test("a family whose lines add up to 0 cannot be split by proportion: nothing is adjusted, no NaN / Infinity", () => {
+  // IGST lines +600 and -600 (sum 0) next to CGST+SGST lines; cess 300 equals the IGST gap, so the old code divided by 0.
+  const e = { cgst_amount: 500, sgst_amount: 500, utgst_amount: 0, igst_amount: -300, cess_amount: 300 };
+  const items = [{ applied_tax_type: "IGST" }, { applied_tax_type: "IGST" }, { applied_tax_type: "CGST_SGST" }];
+  assert.equal(removeCessFromLineTaxes(e, items, [60000, -60000, 100000], 200), null);
+});
+
+test("zero-sum IGST family through the whole engine: result is finite and the mismatch stays visible", () => {
+  const neg = item({ description: f("Return"), quantity: f(1), unit_price: f(-60000), taxable_value: f(-60000), gst_rate: f(18.2), tax_amount: f(-12720), line_total: f(-72720), applied_tax_type: f("IGST") });
+  const r = run(inv({ igst: f(-3000), cgst: f(5000), sgst: f(5000), cess: f(3000), taxable_value: f(100000), grand_total: f(110000),
+    line_items: [ln(60000, 21.2, "IGST", 18.2), neg, ln(100000, 10, "CGST+SGST", 10)] }));
+  assert.deepEqual(finite(r), []);
+  assert.ok(!r.flags.some((x) => x.code === "line_tax_includes_cess"));
+});
+
+test("the three not-adjusted situations (cess spread, gap of another size, no cess printed) never throw and stay finite", () => {
+  const spread = [ln(600000, 20, "IGST", 18.2), ln(300000, 20, "IGST", 18.2), ln(100000, 20, "IGST", 18.2), ln(100000, 33, "CGST+SGST", 18)];
+  const cases = [
+    inv({ line_items: spread }),
+    inv({ cess: f(29000), grand_total: f(1329000) }),
+    inv({ cess: f(1000), grand_total: f(1301000) }),
+    inv({ cess: missing(), grand_total: f(1300000) }),
+    inv({ cess: f(0), grand_total: f(1300000) }),
+  ];
+  for (const c of cases) {
+    const r = run(c);
+    assert.deepEqual(finite(r), []);
+    assert.ok(bad(r).length > 0, "the mismatch must stay visible");
+    assert.notEqual(r.summary.verification.level, "verified");
+  }
+});
