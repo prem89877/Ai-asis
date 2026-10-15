@@ -358,7 +358,7 @@ test("defaults: every layer is on by default, each has its own off switch, and s
   for (const k of ["verify", "audit", "totalCheck", "partiesCheck", "highResolution", "sourceVerify"]) assert.equal(c[k], true, k);
   assert.equal(c.partiesRetries, 1);
   assert.equal(c.model, "gemini-3.5-flash-lite");
-  assert.equal(c.deadlineMs, 52_000);
+  assert.equal(c.deadlineMs, 150_000);
   assert.equal(c.maxAttempts, 3);
   const off = getGeminiConfig({ GEMINI_API_KEY: "k", EXTRACTION_HIGH_RES: "off", EXTRACTION_SOURCE_VERIFY: "false", EXTRACTION_VERIFY: "0" });
   assert.deepEqual([off.highResolution, off.sourceVerify, off.verify], [false, false, false]);
