@@ -70,7 +70,7 @@ const GST_START = "2017-07-01";
 const FIELD_LABEL: Record<string, string> = {
   supplier_name: "supplier name", supplier_gstin: "supplier GSTIN", buyer_name: "buyer name", buyer_gstin: "buyer GSTIN",
   invoice_number: "invoice number", invoice_date: "invoice date", place_of_supply: "place of supply", currency: "currency",
-  taxable_value: "taxable value", discount_total: "discount total", cgst: "CGST", sgst: "SGST", igst: "IGST", cess: "cess", grand_total: "grand total",
+  taxable_value: "taxable value", discount_total: "discount total", cgst: "CGST", sgst: "SGST", utgst_amount: "UTGST", igst: "IGST", cess: "cess", grand_total: "grand total",
   irn: "IRN", ack_no: "acknowledgement number", eway_bill_no: "e-way bill number", line_items: "item table",
 };
 const label = (k: string) => FIELD_LABEL[k] ?? k.replace(/_/g, " ");
@@ -309,7 +309,7 @@ export function auditExtraction(inp: AuditInput): { report: AuditReport; flags: 
     if (fields[key]) continue;
     fields[key] = { status: savedText(e, key) ? "verified" : "not_present", failed_layers: [], reasons: [] };
   }
-  const amounts: Record<string, number | null> = { taxable_value: e.taxable_amount, discount_total: e.discount_amount, cgst: e.cgst_amount, sgst: e.sgst_amount, igst: e.igst_amount, cess: e.cess_amount, grand_total: e.total_amount };
+  const amounts: Record<string, number | null> = { taxable_value: e.taxable_amount, discount_total: e.discount_amount, cgst: e.cgst_amount, sgst: e.sgst_amount, utgst_amount: e.utgst_amount ?? null, igst: e.igst_amount, cess: e.cess_amount, grand_total: e.total_amount };
   for (const [key, v] of Object.entries(amounts)) {
     if (!fields[key]) fields[key] = { status: v === null ? "not_present" : "verified", failed_layers: [], reasons: [] };
   }

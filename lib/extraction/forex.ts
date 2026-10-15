@@ -76,7 +76,7 @@ export function detectBasis(items: StoredItem[], rate: number, tolerancePaise: n
 
 // INR equivalents of the invoice's header amounts at `rate`. Amounts already in INR are left as they are.
 export function convertToInr(e: StoredExtracted, basis: AmountBasis, rate: number): ForexConversion {
-  const tax = num(e.cgst_amount) + num(e.sgst_amount) + num(e.igst_amount) + num(e.cess_amount);
+  const tax = num(e.cgst_amount) + num(e.sgst_amount) + num(e.utgst_amount) + num(e.igst_amount) + num(e.cess_amount);
   const has = e.taxable_amount !== null || e.total_amount !== null;
   if (basis === "unknown" || !has) return { basis, taxable_inr: null, tax_inr: null, total_inr: null, total_foreign: null };
   const inInr = basis === "inr";

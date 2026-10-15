@@ -55,7 +55,7 @@ export function runChecks(extracted: StoredExtracted, items: StoredItem[], opts:
     if (st === "unreadable") flags.push({ code: "unreadable_field", severity: "warning", field: key, message: `The ${label} could not be read reliably.` });
   }
   // Tax/discount amounts: unreadable matters, absent is normal.
-  for (const key of ["discount_total", "cgst", "sgst", "igst", "cess", "currency"]) {
+  for (const key of ["discount_total", "cgst", "sgst", "utgst_amount", "igst", "cess", "currency"]) {
     if (fs[key]?.state === "unreadable") flags.push({ code: "unreadable_field", severity: "warning", field: key, message: `The ${key.replace("_", " ")} could not be read reliably.` });
   }
 

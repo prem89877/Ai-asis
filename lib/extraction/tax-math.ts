@@ -8,10 +8,13 @@
 //   check 4  Cess, TCS and TDS must be believable amounts (a misread digit is the usual cause)
 //   check 5  diagnoseTotalMismatch(): which single head, if left out / counted twice, explains a wrong total
 //
-// UTGST: Union Territories without a legislature charge UTGST instead of SGST. The schema has no separate UTGST field, so
-// UTGST is stored in sgst_amount (the review screen and the exports already label it "SGST / UTGST").
+// UTGST: Union Territories without a legislature charge UTGST instead of SGST. It has its own field (utgst_amount) and is
+// never merged into sgst_amount. The state-level side of an invoice is SGST + UTGST (tax-components.ts); CGST equals that
+// SUM, not SGST alone, so an invoice with SGST lines and UTGST lines is not flagged. Older rows that kept a UT supply in
+// sgst_amount have utgst_amount = null and still work (the sum is the same).
 import { isForeign, hasRate } from "./arithmetic.ts";
 import { toPaise } from "./normalize.ts";
+import { hasStateTax, stateTaxLabel } from "./tax-components.ts";
 import type { ReviewFlag, StoredExtracted, StoredItem } from "./types.ts";
 
 // GST state codes of Union Territories WITHOUT a legislature: Chandigarh 04, Dadra & Nagar Haveli and Daman & Diu 26,
@@ -63,26 +66,27 @@ export function checkTaxHeads(e: StoredExtracted, items: StoredItem[], tolerance
   const memo = e.document_type === "credit_note" || e.document_type === "debit_note";
   const tol = tolerancePaise + Math.min(items.length, 200); // each line's tax is rounded to the paisa
   const stateHead = regime.stateTaxHead ?? "SGST";
-  const stateLabel = regime.kind === "intra_state" ? (regime.stateTaxHead === "UTGST" ? "UTGST" : "SGST") : "SGST / UTGST";
+  const stateLabel = hasStateTax(e) && nonZero(e.utgst_amount) ? stateTaxLabel(e) : regime.kind === "intra_state" ? (regime.stateTaxHead === "UTGST" ? "UTGST" : "SGST") : "SGST / UTGST";
 
   // 1. CGST and SGST / UTGST are always equal on one invoice (each is half of the GST rate).
-  const cg = p(e.cgst_amount), sg = p(e.sgst_amount);
-  if (has(e.cgst_amount) && has(e.sgst_amount) && (cg !== 0 || sg !== 0) && !memo && Math.abs(Math.abs(cg) - Math.abs(sg)) > tol) {
+  // State-level side = SGST + UTGST (each counted once). Equal to CGST on every intra-state line, so equal in total too.
+  const cg = p(e.cgst_amount), sg = p(e.sgst_amount) + p(e.utgst_amount);
+  if (has(e.cgst_amount) && (has(e.sgst_amount) || has(e.utgst_amount)) && (cg !== 0 || sg !== 0) && !memo && Math.abs(Math.abs(cg) - Math.abs(sg)) > tol) {
     flags.push({
       code: "cgst_sgst_unequal", severity: "warning", field: "sgst",
       message: `CGST (INR ${(cg / 100).toFixed(2)}) and ${stateLabel} (INR ${(sg / 100).toFixed(2)}) are different. They are charged at the same amount, so one of them was probably misread. Check the original.`,
-      details: { cgst: cg / 100, sgst: sg / 100, difference: Math.abs(Math.abs(cg) - Math.abs(sg)) / 100, stateTaxHead: stateHead },
+      details: { cgst: cg / 100, sgst: p(e.sgst_amount) / 100, utgst: p(e.utgst_amount) / 100, stateTax: sg / 100, difference: Math.abs(Math.abs(cg) - Math.abs(sg)) / 100, stateTaxHead: stateHead },
     });
   }
 
   // 2. Only one of the two printed, no IGST on the invoice: the other one was most likely missed.
-  if (!memo && !nonZero(e.igst_amount) && (nonZero(e.cgst_amount) !== nonZero(e.sgst_amount)) && (has(e.cgst_amount) || has(e.sgst_amount))) {
+  if (!memo && !nonZero(e.igst_amount) && (nonZero(e.cgst_amount) !== hasStateTax(e)) && (has(e.cgst_amount) || has(e.sgst_amount) || has(e.utgst_amount))) {
     const present = nonZero(e.cgst_amount) ? "CGST" : stateLabel;
     const absent = nonZero(e.cgst_amount) ? stateLabel : "CGST";
     flags.push({
       code: "cgst_sgst_one_sided", severity: "warning", field: nonZero(e.cgst_amount) ? "sgst" : "cgst",
       message: `${present} was read but ${absent} was not (or is 0). Without IGST both are normally charged. Check the original.`,
-      details: { cgst: cg / 100, sgst: sg / 100 },
+      details: { cgst: cg / 100, sgst: p(e.sgst_amount) / 100, utgst: p(e.utgst_amount) / 100 },
     });
   }
 
@@ -142,10 +146,10 @@ export function checkTaxHeads(e: StoredExtracted, items: StoredItem[], tolerance
 export interface TotalParts {
   actual: number; // printed grand total, paise
   base: number; // taxable base used by the total check, paise
-  cgst: number; sgst: number; igst: number; cess: number; tcs: number; tds: number; // paise, magnitudes
+  cgst: number; sgst: number; utgst?: number; igst: number; cess: number; tcs: number; tds: number; // paise, magnitudes
   discount: number | null;
   charges: number | null;
-  expectedTotal: number; // base + cgst + sgst + igst + cess + tcs, paise
+  expectedTotal: number; // base + cgst + sgst + utgst + igst + cess + tcs, paise
   lineImpliedTax: number | null; // sum of taxable x rate over the lines, paise
 }
 
@@ -160,8 +164,14 @@ export function diagnoseTotalMismatch(t: TotalParts, tolerancePaise = 200): Diag
   add(-t.tcs, "total_without_tcs", "The printed total does not seem to include TCS, or the TCS amount was misread.");
   add(-t.cess, "total_without_cess", "The printed total does not seem to include the cess, or the cess amount was misread.");
   add(-t.sgst, "total_without_sgst", "The printed total looks like it has no SGST / UTGST in it. The SGST / UTGST amount may have been misread.");
+  const ut = t.utgst ?? 0;
+  add(-ut, "total_without_utgst", "The printed total looks like it has no UTGST in it. The UTGST amount may be missing or was merged into the SGST field.");
+  add(ut, "utgst_counted_twice", "The UTGST seems to be counted twice, or the UTGST figure was also copied into the SGST field.");
+  add(-(t.sgst + ut), "total_without_state_tax", "The printed total looks like it has neither SGST nor UTGST in it.");
   add(-t.cgst, "total_without_cgst", "The printed total looks like it has no CGST in it. The CGST amount may have been misread.");
   add(-t.igst, "total_without_igst", "The printed total looks like it has no IGST in it. The IGST amount may have been misread.");
+  // Printed total higher than the read heads by exactly the state tax: a separate UTGST line was probably printed but not read.
+  if (t.utgst === 0) add(t.sgst, "utgst_not_read", "The printed total is higher by exactly the SGST amount. A separate UTGST (Union Territory GST) figure may be printed on the invoice but was not read.");
   add(t.sgst, "sgst_counted_twice", "The SGST / UTGST seems to be counted twice, or the SGST figure was copied into another field.");
   add(t.cgst, "cgst_counted_twice", "The CGST seems to be counted twice, or the CGST figure was copied into another field.");
   add(t.cess, "cess_counted_twice", "The cess seems to be counted twice, or it was also copied into another field.");

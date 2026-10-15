@@ -4,13 +4,14 @@
 //
 // Every important figure is checked by more than one independent method ("triple check"):
 //   line level   : validateLineItem()       qty x price - discount, x exchange rate        (arithmetic.ts)
-//   tax level    : validateTaxAllocation()  per-line IGST / CGST / SGST sums vs the invoice (Rule 2, mixed tax)
+//   tax level    : validateTaxAllocation()  per-line IGST / CGST / SGST / UTGST sums vs the invoice (Rule 2, mixed tax)
 //   total level  : validateInvoiceTotals()  two-tier total: grand total (taxable + taxes + TCS) OR net payable (- TDS), +/- round-off (Rule 3)
 //   cross check  : tripleCheckTax()         printed header tax  vs  printed line tax  vs  rate x taxable  vs  state rule
 // An invoice is shown as "verified" only when every method that could run agrees. Disagreement is never hidden.
 import { checkLineItems, hasRate, isForeign, rateToleranceFor } from "./arithmetic.ts";
 import { describeIdentifierProblem, isValidAckNo, isValidEwayBill, isValidIrn } from "./identifiers.ts";
 import { toPaise } from "./normalize.ts";
+import { hasStateTax, known as knownAmt, reconcileHeads, splitLineTaxes, stateTaxPaise, taxHeadsPaise, totalTaxPaise } from "./tax-components.ts";
 import { checkTaxHeads, diagnoseTotalMismatch, type TaxRegime } from "./tax-math.ts";
 import type { ReviewFlag, StoredExtracted, StoredItem } from "./types.ts";
 
@@ -34,7 +35,7 @@ const nonZero = (v: number | null | undefined): boolean => has(v) && v !== 0;
 
 // ---- Rule 2: per-line tax (IGST / CGST / SGST), mixed-tax invoices ----------------------------------------------------
 
-export type TaxType = "IGST" | "CGST_SGST" | "NONE";
+export type TaxType = "IGST" | "CGST_SGST" | "CGST_UTGST" | "NONE";
 
 // Tax on one line in paise: the printed tax amount, else taxable x rate. null when neither can be known.
 export function lineTaxPaise(it: StoredItem): number | null {
@@ -51,40 +52,49 @@ export interface TaxAllocation {
   lineIgst: number; // INR sums of the lines
   lineCgst: number;
   lineSgst: number;
+  lineUtgst: number;
   flags: ReviewFlag[];
 }
 
 export function validateTaxAllocation(e: StoredExtracted, items: StoredItem[], tolerancePaise: number): TaxAllocation {
   const flags: ReviewFlag[] = [];
-  const igstH = p(e.igst_amount), cgstH = p(e.cgst_amount), sgstH = p(e.sgst_amount);
-  const mixed = nonZero(e.igst_amount) && (nonZero(e.cgst_amount) || nonZero(e.sgst_amount));
+  const heads = taxHeadsPaise(e);
+  const igstH = heads.igst, cgstH = heads.cgst, stateH = stateTaxPaise(heads); // stateH = SGST + UTGST, each counted once
+  const mixed = nonZero(e.igst_amount) && (nonZero(e.cgst_amount) || hasStateTax(e));
   const tol = tolerancePaise + Math.min(items.length, 200); // each line's tax is rounded to the paisa
-  const out = (method: TaxAllocation["method"], extra: Partial<TaxAllocation> = {}): TaxAllocation => ({ method, mixed, lineIgst: 0, lineCgst: 0, lineSgst: 0, flags, ...extra });
+  const out = (method: TaxAllocation["method"], extra: Partial<TaxAllocation> = {}): TaxAllocation => ({ method, mixed, lineIgst: 0, lineCgst: 0, lineSgst: 0, lineUtgst: 0, flags, ...extra });
   const taxes = items.map(lineTaxPaise);
   const known = items.length > 0 && taxes.every((t) => t !== null);
-  const labelled = items.length > 0 && items.every((it) => it.applied_tax_type === "IGST" || it.applied_tax_type === "CGST_SGST" || it.applied_tax_type === "NONE");
+  const labelled = items.length > 0 && items.every((it) => it.applied_tax_type === "IGST" || it.applied_tax_type === "CGST_SGST" || it.applied_tax_type === "CGST_UTGST" || it.applied_tax_type === "NONE");
 
   if (labelled && known) {
-    let sumIgst = 0, sumCs = 0;
-    items.forEach((it, i) => {
-      if (it.applied_tax_type === "IGST") sumIgst += taxes[i] as number;
-      else if (it.applied_tax_type === "CGST_SGST") sumCs += taxes[i] as number;
-    });
-    const half = sumCs / 2;
+    // Every line says which tax family it carries, so each head is rebuilt from the lines on its own and compared with the
+    // invoice head. CGST and SGST are NOT forced to be equal: UTGST lines add to the state-level side next to SGST lines.
+    const split = splitLineTaxes(items, taxes);
+    const utKnown = knownAmt(e.utgst_amount);
+    // Legacy invoice (no utgst_amount stored): the state-level side is compared as one figure, SGST + UTGST.
     const bad: string[] = [];
-    if (Math.abs(sumIgst - igstH) > tol) bad.push("IGST");
-    if (Math.abs(half - cgstH) > tol) bad.push("CGST");
-    if (Math.abs(half - sgstH) > tol) bad.push("SGST");
+    if (Math.abs(split.igst - igstH) > tol) bad.push("IGST");
+    if (Math.abs(split.cgst - cgstH) > tol) bad.push("CGST");
+    if (utKnown) {
+      if (Math.abs(split.sgst - heads.sgst) > tol) bad.push("SGST");
+      if (Math.abs(split.utgst - heads.utgst) > tol) bad.push("UTGST");
+    } else if (Math.abs(split.sgst + split.utgst - stateH) > tol) bad.push(split.utgst > 0 && split.sgst === 0 ? "UTGST" : "SGST");
+    const discrepancies = reconcileHeads(heads, utKnown ? split : { ...split, sgst: split.sgst + split.utgst, utgst: 0 }, tol);
     if (bad.length > 0) {
       flags.push({
         code: "tax_allocation_mismatch", severity: "warning",
         message: `The ${bad.join(", ")} of the individual lines does not add up to the invoice ${bad.join(", ")}. Check the original.`,
-        details: { lineIgst: sumIgst / 100, lineCgst: half / 100, lineSgst: half / 100, invoiceIgst: igstH / 100, invoiceCgst: cgstH / 100, invoiceSgst: sgstH / 100 },
+        details: {
+          lineIgst: split.igst / 100, lineCgst: split.cgst / 100, lineSgst: split.sgst / 100, lineUtgst: split.utgst / 100,
+          invoiceIgst: igstH / 100, invoiceCgst: cgstH / 100, invoiceSgst: heads.sgst / 100, invoiceUtgst: heads.utgst / 100,
+          mismatchedHeads: bad, discrepancies,
+        },
       });
     } else if (mixed) {
-      flags.push({ code: "mixed_tax_invoice", severity: "info", message: "IGST and CGST/SGST are both charged. This is allowed when different lines carry different taxes, and every line adds up." });
+      flags.push({ code: "mixed_tax_invoice", severity: "info", message: "IGST and CGST/SGST/UTGST are both charged. This is allowed when different lines carry different taxes, and every line adds up." });
     }
-    return out("labelled", { lineIgst: sumIgst / 100, lineCgst: half / 100, lineSgst: half / 100 });
+    return out("labelled", { lineIgst: split.igst / 100, lineCgst: split.cgst / 100, lineSgst: split.sgst / 100, lineUtgst: split.utgst / 100 });
   }
 
   if (!mixed) return out("not_needed");
@@ -101,13 +111,13 @@ export function validateTaxAllocation(e: StoredExtracted, items: StoredItem[], t
     let sumIgst = 0;
     for (let i = 0; i < n; i++) if (mask & (1 << i)) sumIgst += taxes[i] as number;
     const half = (total - sumIgst) / 2;
-    if (Math.abs(sumIgst - igstH) <= tol && Math.abs(half - cgstH) <= tol && Math.abs(half - sgstH) <= tol) solutions.push(mask);
+    if (Math.abs(sumIgst - igstH) <= tol && Math.abs(half - cgstH) <= tol && Math.abs(half - stateH) <= tol) solutions.push(mask);
   }
   if (solutions.length === 0) {
     flags.push({
       code: "mixed_tax_unreconciled", severity: "warning",
       message: "IGST and CGST/SGST are both charged and no split of the line items reproduces them. Check the original.",
-      details: { invoiceIgst: igstH / 100, invoiceCgst: cgstH / 100, invoiceSgst: sgstH / 100 },
+      details: { invoiceIgst: igstH / 100, invoiceCgst: cgstH / 100, invoiceSgst: heads.sgst / 100, invoiceUtgst: heads.utgst / 100 },
     });
     return out("unverified");
   }
@@ -207,7 +217,8 @@ export function validateInvoiceTotals(e: StoredExtracted, items: StoredItem[], o
   const total = e.total_amount;
   if (total === null || base0 === null) return NOT_CHECKED(flags);
 
-  const tax = p(e.cgst_amount) + p(e.sgst_amount) + p(e.igst_amount) + p(e.cess_amount);
+  // Every head counted once: CGST + SGST + UTGST + IGST + cess (see tax-components.ts).
+  const tax = totalTaxPaise(taxHeadsPaise(e));
   // TCS can only ever add to the invoice and TDS can only ever reduce the payment. Invoices print them as "(-) 1,000.00",
   // "Less: TDS 1,000.00" or plain, so the direction comes from what the figure IS, not from the sign it was printed with.
   const tcs = Math.abs(p(e.tcs_amount)), tds = Math.abs(p(e.tds_amount));
@@ -285,16 +296,16 @@ export function validateInvoiceTotals(e: StoredExtracted, items: StoredItem[], o
   }
 
   if (!matched) {
-    const absent = (["cgst", "sgst", "igst", "cess"] as const).filter((k) => fs[k]?.state === "missing");
+    const absent = (["cgst", "sgst", "igst", "cess"] as const) // utgst_amount is optional (most invoices have none), so its absence is never reported.filter((k) => fs[k]?.state === "missing");
     // Second layer (tax-math.ts): which single tax head, if left out or counted twice, would explain the printed total?
     const lineImplied = items.length > 0 && items.every((it) => has(it.gst_rate) && has(it.taxable_amount))
       ? items.reduce((a, it) => a + toPaise(((it.taxable_amount as number) * (it.gst_rate as number)) / 100), 0)
       : null;
     const causes = diagnoseTotalMismatch({
-      actual, base: base0, cgst: Math.abs(p(e.cgst_amount)), sgst: Math.abs(p(e.sgst_amount)), igst: Math.abs(p(e.igst_amount)), cess: Math.abs(p(e.cess_amount)),
+      actual, base: base0, cgst: Math.abs(p(e.cgst_amount)), sgst: Math.abs(p(e.sgst_amount)), utgst: Math.abs(p(e.utgst_amount)), igst: Math.abs(p(e.igst_amount)), cess: Math.abs(p(e.cess_amount)),
       tcs, tds, discount: disc, charges, expectedTotal: tier1(base0), lineImpliedTax: lineImplied,
     });
-    const headTax = Math.abs(p(e.cgst_amount)) + Math.abs(p(e.sgst_amount)) + Math.abs(p(e.igst_amount));
+    const headTax = Math.abs(p(e.cgst_amount)) + Math.abs(p(e.sgst_amount)) + Math.abs(p(e.utgst_amount)) + Math.abs(p(e.igst_amount));
     const taxDisagrees = lineImplied !== null && foreignRate === null && Math.abs(Math.abs(lineImplied) - headTax) > tol + items.length;
     const netPrinted = has(e.net_payable_amount) ? toPaise(e.net_payable_amount) : null;
     flags.push({
@@ -452,10 +463,10 @@ function stateOf(text: string | null | undefined, kind: "gstin" | "place"): stri
 export function tripleCheckTax(e: StoredExtracted, items: StoredItem[], tolerancePaise: number): Verification {
   const tol = tolerancePaise + Math.min(items.length, 200);
   const methods: Verification["methods"] = [];
-  const headerKnown = [e.cgst_amount, e.sgst_amount, e.igst_amount].some(has);
+  const headerKnown = [e.cgst_amount, e.sgst_amount, e.utgst_amount, e.igst_amount].some(has);
   if (!headerKnown) return { level: "not_checked", methods, disagreeing: [] };
-  const header = p(e.cgst_amount) + p(e.sgst_amount) + p(e.igst_amount);
-  methods.push({ id: "printed_invoice_tax", label: "CGST + SGST + IGST printed on the invoice", value: header / 100 });
+  const header = p(e.cgst_amount) + p(e.sgst_amount) + p(e.utgst_amount) + p(e.igst_amount); // total GST, each head once
+  methods.push({ id: "printed_invoice_tax", label: "CGST + SGST + UTGST + IGST printed on the invoice", value: header / 100 });
   if (items.length > 0 && items.every((it) => has(it.gst_amount))) {
     methods.push({ id: "printed_line_tax", label: "Sum of the tax printed on each line", value: items.reduce((a, it) => a + p(it.gst_amount), 0) / 100 });
   }
@@ -467,11 +478,11 @@ export function tripleCheckTax(e: StoredExtracted, items: StoredItem[], toleranc
 
   // Fourth, rule-based method: supplier state vs place of supply decides which tax head is expected.
   const sup = stateOf(e.vendor_gstin, "gstin"), pos = stateOf(e.place_of_supply, "place");
-  const mixed = nonZero(e.igst_amount) && (nonZero(e.cgst_amount) || nonZero(e.sgst_amount));
+  const mixed = nonZero(e.igst_amount) && (nonZero(e.cgst_amount) || hasStateTax(e));
   if (sup && pos && pos !== "96" && pos !== "97" && !mixed && header !== 0) {
     const intra = sup === pos;
-    const ok = intra ? !nonZero(e.igst_amount) : !(nonZero(e.cgst_amount) || nonZero(e.sgst_amount));
-    methods.push({ id: "state_rule", label: intra ? "Same state: CGST + SGST expected" : "Different states: IGST expected", value: header / 100 });
+    const ok = intra ? !nonZero(e.igst_amount) : !(nonZero(e.cgst_amount) || hasStateTax(e));
+    methods.push({ id: "state_rule", label: intra ? "Same state: CGST + SGST / UTGST expected" : "Different states: IGST expected", value: header / 100 });
     if (!ok) disagreeing.push("state_rule");
   }
   const level: Verification["level"] = disagreeing.length > 0 ? "unverified" : methods.length >= 3 ? "verified" : "partial";

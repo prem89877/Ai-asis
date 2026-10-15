@@ -58,7 +58,7 @@ export const ITEM_NUMBER_FIELDS = [
 //  - Bottom-line summary (always read together): grand_total = Taxable + taxes + TCS (BEFORE any TDS), tds_amount = withholding,
 //    net_payable_amount = grand_total - tds_amount. See validateInvoiceTotals() in gst-engine.ts for the two-tier check.
 //  - text fields are e-invoice / e-way bill metadata. They are stored as text only and never enter any calculation.
-export const OPTIONAL_AMOUNT_FIELDS = ["exchange_rate", "tcs_amount", "tds_amount", "pre_tax_charges", "round_off_amount", "net_payable_amount"] as const;
+export const OPTIONAL_AMOUNT_FIELDS = ["exchange_rate", "utgst_amount", "tcs_amount", "tds_amount", "pre_tax_charges", "round_off_amount", "net_payable_amount"] as const;
 // The four bottom-line fields of the invoice summary (TCS, TDS, round-off, net payable). The prompts and the response schema
 // describe them explicitly so the model decides for each one whether it is printed.
 export const BOTTOM_LINE_FIELDS = ["tcs_amount", "tds_amount", "round_off_amount", "net_payable_amount"] as const;
@@ -162,7 +162,8 @@ export interface StoredExtracted {
   taxable_amount: number | null;
   discount_amount: number | null;
   cgst_amount: number | null;
-  sgst_amount: number | null;
+  sgst_amount: number | null; // State GST. Legacy rows (utgst_amount null) may hold a UT supply here: see tax-components.ts
+  utgst_amount?: number | null; // Union Territory GST: its own amount, never merged into sgst_amount
   igst_amount: number | null;
   cess_amount: number | null;
   total_amount: number | null;
@@ -182,7 +183,7 @@ export interface StoredItem {
   unit_price: number | null;
   discount_amount: number | null;
   discount_type?: "PERCENT" | "FLAT" | "AMOUNT" | null; // optional hint (FLAT = AMOUNT); when absent both readings are tried
-  applied_tax_type?: "IGST" | "CGST_SGST" | "NONE" | null; // which tax this line carries; lets mixed-tax invoices be checked line by line
+  applied_tax_type?: "IGST" | "CGST_SGST" | "CGST_UTGST" | "NONE" | null; // which tax this line carries; lets mixed-tax invoices be checked line by line
   taxable_amount: number | null;
   gst_rate: number | null;
   gst_amount: number | null;

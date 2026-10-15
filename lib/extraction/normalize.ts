@@ -180,12 +180,16 @@ export function normalizeDiscountType(raw: string | null): "PERCENT" | "FLAT" | 
   return null;
 }
 
-// "IGST" -> IGST; "CGST_SGST", "CGST+SGST", "CGST/SGST", "CGST & SGST", "SGST/UTGST" -> CGST_SGST; "NONE", "NIL", "EXEMPT" -> NONE.
+// "IGST" -> IGST; "CGST_SGST", "CGST+SGST", "CGST/SGST", "CGST & SGST", "SGST/UTGST" -> CGST_SGST; "CGST+UTGST" -> CGST_UTGST; "NONE", "NIL", "EXEMPT" -> NONE.
 export function normalizeAppliedTaxType(raw: string | null): StoredItemType["applied_tax_type"] {
   if (raw === null) return null;
   const t = raw.trim().toUpperCase().replace(/[^A-Z]/g, "");
   if (t === "IGST") return "IGST";
   // Any label that names CGST together with SGST or UTGST ("CGST+SGST/UTGST", "CGST & UTGST", "UTGST/CGST") is the split tax.
+  // CGST with UTGST only (a Union Territory supply) is its own type, so UTGST is never folded into SGST. Labels that name
+  // both SGST and UTGST ("SGST/UTGST") stay CGST_SGST for older readings.
+  const hasUt = t.replace(/UTGST/g, "").length !== t.length, hasSgstOnly = t.replace(/UTGST/g, "").includes("SGST");
+  if (t.includes("CGST") && hasUt && !hasSgstOnly && !t.includes("IGST")) return "CGST_UTGST";
   if (t.includes("CGST") && (t.includes("SGST") || t.includes("UTGST")) && !t.includes("IGST")) return "CGST_SGST";
   if (/^(NONE|NIL|EXEMPT|NILRATED|ZERO)$/.test(t)) return "NONE";
   return null;
@@ -225,9 +229,11 @@ export function normalizeExtraction(model: ModelOutput, opts: NormalizeOptions):
   // net payable (amount after the TDS deduction).
   // Round-off may be negative; the others are normally positive. Absent stays null, it is never turned into 0.
   const extras: Record<string, number | null> = {};
-  for (const key of ["tcs_amount", "tds_amount", "pre_tax_charges", "round_off_amount", "net_payable_amount"] as const) {
+  for (const key of ["utgst_amount", "tcs_amount", "tds_amount", "pre_tax_charges", "round_off_amount", "net_payable_amount"] as const) {
     const f = model[key];
     extras[key] = f ? readAmount(c, key, f, { dp: 2, max: MAX_ABS_AMOUNT, allowNegative: memo || key === "round_off_amount" }) : null;
+    // UTGST is an editable header field like SGST: a reading that did not mention it records "missing" instead of nothing.
+    if (!f && key === "utgst_amount") c.status[key] = { state: "missing", confidence: 0 };
   }
   // e-invoice / e-way bill metadata: text only, never used in any calculation. Labels ("IRN:"), spaces, line breaks and dashes are
   // removed; a misread letter inside an IRN (O for 0, I or l for 1) is repaired only when that gives exactly 64 hex characters,
@@ -386,6 +392,7 @@ export function normalizeExtraction(model: ModelOutput, opts: NormalizeOptions):
     discount_amount: amt.discount_total,
     cgst_amount: amt.cgst,
     sgst_amount: amt.sgst,
+    utgst_amount: extras.utgst_amount,
     igst_amount: amt.igst,
     cess_amount: amt.cess,
     total_amount: amt.grand_total,

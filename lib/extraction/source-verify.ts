@@ -81,7 +81,8 @@ const HEADER: Record<string, HeaderDef> = {
   invoice_date: { kind: "date", label: "invoice date", where: "the invoice date (not the due date, e-way bill date or acknowledgement date), as YYYY-MM-DD, day first", stored: "invoice_date" },
   taxable_value: { kind: "amount", label: "taxable value", where: "invoice-level total taxable value / taxable amount (before tax)", stored: "taxable_amount" },
   cgst: { kind: "amount", label: "CGST", where: "invoice-level total CGST amount", stored: "cgst_amount" },
-  sgst: { kind: "amount", label: "SGST", where: "invoice-level total SGST / UTGST amount", stored: "sgst_amount" },
+  sgst: { kind: "amount", label: "SGST", where: "invoice-level total SGST (State GST) amount. UTGST is a separate figure and is NOT part of it", stored: "sgst_amount" },
+  utgst_amount: { kind: "amount", label: "UTGST", where: "invoice-level total UTGST (Union Territory GST) amount, a separate figure from SGST", stored: "utgst_amount" },
   igst: { kind: "amount", label: "IGST", where: "invoice-level total IGST amount", stored: "igst_amount" },
   cess: { kind: "amount", label: "cess", where: "invoice-level total cess amount", stored: "cess_amount" },
   grand_total: { kind: "amount", label: "grand total", where: "the invoice grand total BEFORE any TDS deduction", stored: "total_amount" },
@@ -111,7 +112,7 @@ export interface DetectInput {
 // A supplier GSTIN is normally printed on a tax invoice, and always when GST is charged. Only then is a missing one worth a re-read
 // (a bill of supply or an unregistered supplier legitimately has none, so that case costs no extra call).
 function supplierGstinExpected(e: StoredExtracted): boolean {
-  return e.document_type === "tax_invoice" || [e.cgst_amount, e.sgst_amount, e.igst_amount].some((v) => v !== null && v !== 0);
+  return e.document_type === "tax_invoice" || [e.cgst_amount, e.sgst_amount, e.utgst_amount, e.igst_amount].some((v) => v !== null && v !== undefined && v !== 0);
 }
 
 const arithmeticFlags = (flags: ReviewFlag[]) => flags.filter((f) => f.code.startsWith("arithmetic_") && (f.severity === "error" || f.severity === "warning"));
@@ -175,7 +176,7 @@ export function detectSuspicious(inp: DetectInput): Target[] {
       for (const k of ["quantity", "unit_price", "taxable_value"]) add("item", k, "quantity x unit price does not match the taxable value", f.itemPosition);
     } else if (f.code === "arithmetic_total_mismatch") {
       // A tax that was never read (null) is normal (IGST on an intra-state invoice), so only values that exist are re-read.
-      for (const k of ["grand_total", "taxable_value", "cgst", "sgst", "igst"]) if (k === "grand_total" || e[HEADER[k].stored] !== null) add("header", k, "the invoice total does not add up");
+      for (const k of ["grand_total", "taxable_value", "cgst", "sgst", "utgst_amount", "igst"]) if (k === "grand_total" || (e[HEADER[k].stored] ?? null) !== null) add("header", k, "the invoice total does not add up");
     } else if (f.code === "arithmetic_subtotal_mismatch") {
       add("header", "taxable_value", "the item rows do not add up to the taxable value");
     } else if (f.itemPosition) {

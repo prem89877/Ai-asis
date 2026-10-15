@@ -75,6 +75,7 @@ export function createSupabaseStore(admin: SupabaseClient): ExtractionStore {
             place_of_supply: e.place_of_supply,
             currency: e.currency,
             exchange_rate: e.exchange_rate ?? null,
+            utgst_amount: e.utgst_amount ?? null,
             tcs_amount: e.tcs_amount ?? null,
             tds_amount: e.tds_amount ?? null,
             pre_tax_charges: e.pre_tax_charges ?? null,

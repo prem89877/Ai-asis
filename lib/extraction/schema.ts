@@ -122,7 +122,8 @@ export function validateModelOutput(input: unknown): ValidationResult {
 
 // Plain-language descriptions of the invoice bottom-line summary fields. They are sent to the model so that each of the four
 // is read explicitly (printed or not) instead of being skipped. They describe the field; they never ask the model to calculate.
-export const BOTTOM_LINE_DESCRIPTIONS: Record<(typeof BOTTOM_LINE_FIELDS)[number], string> = {
+export const BOTTOM_LINE_DESCRIPTIONS: Record<(typeof BOTTOM_LINE_FIELDS)[number] | "utgst_amount", string> = {
+  utgst_amount: "Union Territory GST (UTGST) as printed in the totals box. A separate figure from SGST: never merged into sgst. Missing when no UTGST is printed.",
   tcs_amount: "Tax Collected at Source (Sec 206C) as printed in the bottom summary. Added after tax and already inside grand_total. Positive number.",
   tds_amount: "Tax Deducted at Source / withholding (Sec 194Q) as printed in the bottom summary. Deducted from the payment, NOT inside grand_total. Positive number.",
   round_off_amount: "Printed round-off / rounding adjustment. Negative when it reduces the total, positive when it increases it.",
