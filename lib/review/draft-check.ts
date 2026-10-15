@@ -22,7 +22,7 @@ type ItemDraft = Record<ItemColumn, string>;
 
 const GST_START = "2017-07-01";
 const TAX_COLUMNS: HeaderColumn[] = ["cgst_amount", "sgst_amount", "utgst_amount", "igst_amount", "cess_amount"];
-const TOTAL_COLUMNS: HeaderColumn[] = ["taxable_amount", "cgst_amount", "sgst_amount", "utgst_amount", "igst_amount", "cess_amount", "total_amount"];
+const TOTAL_COLUMNS: HeaderColumn[] = ["taxable_amount", "discount_amount", "cgst_amount", "sgst_amount", "utgst_amount", "igst_amount", "cess_amount", "total_amount"];
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/;
 
@@ -134,8 +134,13 @@ export function checkHeaderDraft(draft: HeaderDraft, base: HeaderDraft, now: Dat
     if (taxable !== null && total !== null) {
       const tax = TAX_COLUMNS.reduce((s, c) => s + (n(c) ?? 0), 0);
       const expected = taxable + tax;
-      if (Math.abs(expected - total) > 2) {
-        push(out, "total_amount", "warning", `After your change, taxable value + taxes = ${inr(expected)} but the grand total is ${inr(total)} (difference ${inr(Math.abs(expected - total))}). Ignore this if TCS, round-off or other charges are printed on the invoice.`);
+      // A commercial discount printed under the subtotal lowers the amount payable (subtotal - discount = net payable), so a total
+      // that equals taxable + taxes - discount is explained. It is never treated as TCS / TDS. The discount is only used when typed.
+      const discount = n("discount_amount");
+      const netOfDiscount = discount !== null && discount > 0 ? expected - discount : null;
+      const explained = Math.abs(expected - total) <= 2 || (netOfDiscount !== null && Math.abs(netOfDiscount - total) <= 2);
+      if (!explained) {
+        push(out, "total_amount", "warning", `After your change, taxable value + taxes = ${inr(expected)}${netOfDiscount !== null ? ` (${inr(netOfDiscount)} after the discount)` : ""} but the grand total is ${inr(total)} (difference ${inr(Math.abs(expected - total))}). Ignore this if TCS, round-off or other charges are printed on the invoice.`);
       }
     }
   }
