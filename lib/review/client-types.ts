@@ -83,7 +83,7 @@ export function warningChips(row: Pick<ReviewRow, "flag_keys" | "flag_codes">): 
   if (has("supplier_gstin_inactive", "supplier_gstin_blocked")) out.push({ key: "vendorstatus", label: "Supplier GSTIN not active", tone: "warning" });
   if (has("verification_failed")) out.push({ key: "verifyfail", label: "Check failed", tone: "warning" });
   if (has("possible_duplicate")) out.push({ key: "dup", label: "Possible duplicate", tone: "warning" });
-  if (has("arithmetic_total_mismatch", "arithmetic_subtotal_mismatch", "arithmetic_line_mismatch", "gst_type_mismatch", "cgst_sgst_unequal", "item_tax_rate_mismatch", "invoice_tax_rate_mismatch", "tax_type_conflict", "tax_on_bill_of_supply")) {
+  if (has("arithmetic_total_mismatch", "arithmetic_subtotal_mismatch", "arithmetic_line_mismatch", "gst_type_mismatch", "cgst_sgst_unequal", "item_tax_rate_mismatch", "invoice_tax_rate_mismatch", "tax_type_conflict", "tax_on_bill_of_supply", "tax_allocation_mismatch", "tax_component_mismatch", "tds_matches_discount", "tcs_matches_discount")) {
     out.push({ key: "tax", label: "Tax/total mismatch", tone: "error" });
   }
   return out;

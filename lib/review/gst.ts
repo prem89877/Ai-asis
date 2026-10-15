@@ -111,8 +111,11 @@ export function gstChecks(doc: Doc, items: StoredItem[], opts: GstOptions): Revi
     if (Math.abs(toPaise(doc.cgst_amount) - state) > Math.min(tol, 100)) {
       flags.push({
         code: "cgst_sgst_unequal", severity: "warning", field: "cgst",
-        message: nonZero(doc.utgst_amount) ? "CGST differs from SGST + UTGST. They are normally equal." : "CGST and SGST amounts differ. They are normally equal.",
-        details: { cgst: doc.cgst_amount, sgst: doc.sgst_amount, utgst: doc.utgst_amount ?? null, stateTax: state / 100 },
+        message: `${nonZero(doc.utgst_amount) ? "SGST + UTGST" : "SGST"}: expected INR ${(toPaise(doc.cgst_amount) / 100).toFixed(2)} (equal to CGST), found INR ${(state / 100).toFixed(2)}. ${nonZero(doc.utgst_amount) ? "CGST differs from SGST + UTGST. They are normally equal." : "CGST and SGST amounts differ. They are normally equal."}`,
+        details: {
+          cgst: doc.cgst_amount, sgst: doc.sgst_amount, utgst: doc.utgst_amount ?? null, stateTax: state / 100,
+          field: "sgst", expected: toPaise(doc.cgst_amount) / 100, observed: state / 100, reason: "CGST must equal the state-level tax (SGST + UTGST).",
+        },
       });
     }
   }
