@@ -123,3 +123,12 @@ Every finding states the field, the expected value, the observed value and the r
   Rollback = re-run the view from `014_utgst.sql`.
 * **Known limitation.** Tally still does not book TCS (it has no TCS ledger), so an invoice whose total includes TCS is skipped with the usual
   "does not add up" message rather than being booked wrongly.
+
+## Line tax that already contains the cess (`tax-components.ts`)
+
+Some invoices print a per-line tax (or a combined rate) that is GST + cess. Read as CGST + SGST it makes every head too high by half the cess
+(for example CGST expected 73,850 instead of 51,500). `removeCessFromLineTaxes()` is the single place that handles it; `validateTaxAllocation()`,
+`reconcileTaxComponents()`, `tripleCheckTax()` and the line-rate check in `tax-math.ts` all use it. It applies ONLY when: a cess is printed on the
+invoice, the line taxes add up to invoice GST + cess (and not to GST alone) within the rounding window, and the taxed lines are of one family
+(all CGST+SGST, all CGST+UTGST or all IGST). Then the cess is taken out of the line taxes and an info flag `line_tax_includes_cess` is added.
+Mixed families, no printed cess, or any other difference keep the old behaviour, so real errors stay visible. No stored amount is changed.
