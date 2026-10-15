@@ -17,6 +17,7 @@ export type HeaderColumn =
   | "discount_amount"
   | "cgst_amount"
   | "sgst_amount"
+  | "utgst_amount"
   | "igst_amount"
   | "cess_amount"
   | "total_amount";
@@ -42,7 +43,8 @@ export const HEADER_FIELDS: readonly HeaderFieldDef[] = [
   { column: "taxable_amount", statusKey: "taxable_value", label: "Taxable value", kind: "amount" },
   { column: "discount_amount", statusKey: "discount_total", label: "Discount", kind: "amount" },
   { column: "cgst_amount", statusKey: "cgst", label: "CGST", kind: "amount" },
-  { column: "sgst_amount", statusKey: "sgst", label: "SGST / UTGST", kind: "amount" },
+  { column: "sgst_amount", statusKey: "sgst", label: "SGST", kind: "amount" },
+  { column: "utgst_amount", statusKey: "utgst_amount", label: "UTGST", kind: "amount" },
   { column: "igst_amount", statusKey: "igst", label: "IGST", kind: "amount" },
   { column: "cess_amount", statusKey: "cess", label: "Cess", kind: "amount" },
   { column: "total_amount", statusKey: "grand_total", label: "Grand total", kind: "amount" },

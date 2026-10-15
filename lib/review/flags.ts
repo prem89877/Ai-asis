@@ -42,6 +42,7 @@ export function toStoredExtracted(h: HeaderValues, fieldStatus: Record<string, F
     discount_amount: num(h.discount_amount),
     cgst_amount: num(h.cgst_amount),
     sgst_amount: num(h.sgst_amount),
+    utgst_amount: num(h.utgst_amount),
     igst_amount: num(h.igst_amount),
     cess_amount: num(h.cess_amount),
     total_amount: num(h.total_amount),

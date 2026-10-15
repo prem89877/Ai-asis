@@ -21,8 +21,8 @@ type HeaderDraft = Record<HeaderColumn, string>;
 type ItemDraft = Record<ItemColumn, string>;
 
 const GST_START = "2017-07-01";
-const TAX_COLUMNS: HeaderColumn[] = ["cgst_amount", "sgst_amount", "igst_amount", "cess_amount"];
-const TOTAL_COLUMNS: HeaderColumn[] = ["taxable_amount", "cgst_amount", "sgst_amount", "igst_amount", "cess_amount", "total_amount"];
+const TAX_COLUMNS: HeaderColumn[] = ["cgst_amount", "sgst_amount", "utgst_amount", "igst_amount", "cess_amount"];
+const TOTAL_COLUMNS: HeaderColumn[] = ["taxable_amount", "cgst_amount", "sgst_amount", "utgst_amount", "igst_amount", "cess_amount", "total_amount"];
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/;
 
@@ -115,13 +115,17 @@ export function checkHeaderDraft(draft: HeaderDraft, base: HeaderDraft, now: Dat
   const n = (c: HeaderColumn) => (numberOf(draft[c]) ?? null);
   const cgst = n("cgst_amount");
   const sgst = n("sgst_amount");
+  const utgst = n("utgst_amount");
   const igst = n("igst_amount");
-  if (cgst !== null && sgst !== null && Math.abs(cgst - sgst) > 1) {
-    for (const c of ["cgst_amount", "sgst_amount"] as const) if (changed("cgst_amount") || changed("sgst_amount")) push(out, c, "warning", `CGST and SGST are normally equal (CGST ${inr(cgst)}, SGST ${inr(sgst)}).`);
+  const stateTax = sgst === null && utgst === null ? null : (sgst ?? 0) + (utgst ?? 0); // SGST + UTGST, each its own amount
+  const stateChanged = () => changed("sgst_amount") || changed("utgst_amount");
+  if (cgst !== null && stateTax !== null && Math.abs(cgst - stateTax) > 1) {
+    for (const c of ["cgst_amount", "sgst_amount", "utgst_amount"] as const) if ((n(c) !== null) && (changed("cgst_amount") || stateChanged())) push(out, c, "warning", `CGST and SGST + UTGST are normally equal (CGST ${inr(cgst)}, SGST + UTGST ${inr(stateTax)}).`);
   }
-  if (igst !== null && igst !== 0 && ((cgst ?? 0) !== 0 || (sgst ?? 0) !== 0)) {
-    for (const c of ["igst_amount", "cgst_amount", "sgst_amount"] as const) {
-      if (changed("igst_amount") || changed("cgst_amount") || changed("sgst_amount")) if (n(c) !== null && n(c) !== 0) push(out, c, "warning", "IGST and CGST / SGST are normally not charged on the same invoice.");
+  if (igst !== null && igst !== 0 && ((cgst ?? 0) !== 0 || (sgst ?? 0) !== 0 || (utgst ?? 0) !== 0)) {
+    // Allowed on a mixed invoice (some lines IGST, others CGST + SGST / UTGST), so this stays a soft note.
+    for (const c of ["igst_amount", "cgst_amount", "sgst_amount", "utgst_amount"] as const) {
+      if (changed("igst_amount") || changed("cgst_amount") || stateChanged()) if (n(c) !== null && n(c) !== 0) push(out, c, "warning", "IGST and CGST / SGST / UTGST are normally not charged on the same invoice, unless different lines carry different taxes.");
     }
   }
   if (isIndian(draft.currency) && TOTAL_COLUMNS.some(changed)) {

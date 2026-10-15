@@ -65,17 +65,17 @@ export interface GstOptions {
 
 type Doc = Pick<
   StoredExtracted,
-  "document_type" | "vendor_gstin" | "place_of_supply" | "taxable_amount" | "total_amount" | "cgst_amount" | "sgst_amount" | "igst_amount" | "cess_amount"
+  "document_type" | "vendor_gstin" | "place_of_supply" | "taxable_amount" | "total_amount" | "cgst_amount" | "sgst_amount" | "utgst_amount" | "igst_amount" | "cess_amount"
 >;
 
 export function gstChecks(doc: Doc, items: StoredItem[], opts: GstOptions): ReviewFlag[] {
   const flags: ReviewFlag[] = [];
   const tol = opts.tolerancePaise;
   const type = doc.document_type;
-  const taxAmounts = [doc.cgst_amount, doc.sgst_amount, doc.igst_amount];
+  const taxAmounts = [doc.cgst_amount, doc.sgst_amount, doc.utgst_amount, doc.igst_amount];
   const anyTax = taxAmounts.some(nonZero);
   const hasIgst = nonZero(doc.igst_amount);
-  const hasCgstSgst = nonZero(doc.cgst_amount) || nonZero(doc.sgst_amount);
+  const hasCgstSgst = nonZero(doc.cgst_amount) || nonZero(doc.sgst_amount) || nonZero(doc.utgst_amount); // SGST or UTGST
 
   // 1. Place of supply vs supplier state decides CGST+SGST or IGST.
   const supplierState = stateCodeFromGstin(doc.vendor_gstin);
@@ -104,13 +104,15 @@ export function gstChecks(doc: Doc, items: StoredItem[], opts: GstOptions): Revi
     });
   }
 
-  // 2. CGST and SGST are the same amount on an intra-state supply.
-  if (doc.cgst_amount !== null && doc.sgst_amount !== null && nonZero(doc.cgst_amount) && nonZero(doc.sgst_amount)) {
-    if (Math.abs(toPaise(doc.cgst_amount) - toPaise(doc.sgst_amount)) > Math.min(tol, 100)) {
+  // 2. CGST equals the state-level tax (SGST + UTGST, each its own amount) on an intra-state supply. Compared as a SUM, so an
+  // invoice with SGST lines and UTGST lines does not raise a false alarm, and SGST alone is never forced to equal CGST.
+  if (doc.cgst_amount !== null && (doc.sgst_amount !== null || doc.utgst_amount !== null) && nonZero(doc.cgst_amount) && (nonZero(doc.sgst_amount) || nonZero(doc.utgst_amount))) {
+    const state = toPaise(doc.sgst_amount ?? 0) + toPaise(doc.utgst_amount ?? 0);
+    if (Math.abs(toPaise(doc.cgst_amount) - state) > Math.min(tol, 100)) {
       flags.push({
         code: "cgst_sgst_unequal", severity: "warning", field: "cgst",
-        message: "CGST and SGST amounts differ. They are normally equal.",
-        details: { cgst: doc.cgst_amount, sgst: doc.sgst_amount },
+        message: nonZero(doc.utgst_amount) ? "CGST differs from SGST + UTGST. They are normally equal." : "CGST and SGST amounts differ. They are normally equal.",
+        details: { cgst: doc.cgst_amount, sgst: doc.sgst_amount, utgst: doc.utgst_amount ?? null, stateTax: state / 100 },
       });
     }
   }
@@ -152,18 +154,18 @@ export function gstChecks(doc: Doc, items: StoredItem[], opts: GstOptions): Revi
   });
 
   if (allRated) {
-    const headerTax = toPaise(nz(doc.cgst_amount)) + toPaise(nz(doc.sgst_amount)) + toPaise(nz(doc.igst_amount));
+    const headerTax = toPaise(nz(doc.cgst_amount)) + toPaise(nz(doc.sgst_amount)) + toPaise(nz(doc.utgst_amount)) + toPaise(nz(doc.igst_amount));
     const headerKnown = taxAmounts.some((v) => v !== null);
     if (headerKnown && Math.abs(headerTax - expectedTotal) > tol) {
       flags.push({
         code: "invoice_tax_rate_mismatch", severity: "warning",
-        message: "The invoice's CGST + SGST + IGST does not match the item taxable values at their stated rates.",
+        message: "The invoice's CGST + SGST + UTGST + IGST does not match the item taxable values at their stated rates.",
         details: { expected: expectedTotal / 100, extracted: headerTax / 100 },
       });
     }
   } else if (items.every((it) => it.gst_rate === null) && doc.taxable_amount && doc.taxable_amount > 0 && anyTax) {
     // No item rates: look at the effective rate of the whole invoice.
-    const tax = nz(doc.cgst_amount) + nz(doc.sgst_amount) + nz(doc.igst_amount);
+    const tax = nz(doc.cgst_amount) + nz(doc.sgst_amount) + nz(doc.utgst_amount) + nz(doc.igst_amount);
     const effective = (tax / doc.taxable_amount) * 100;
     if (!COMMON_GST_RATES.some((r) => Math.abs(r - effective) <= 0.15)) {
       flags.push({
