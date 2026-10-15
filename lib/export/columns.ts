@@ -31,6 +31,7 @@ export interface ExportInvoice {
   discount_amount: number | null;
   cgst_amount: number | null;
   sgst_amount: number | null;
+  utgst_amount?: number | null;
   igst_amount: number | null;
   cess_amount: number | null;
   tax_total: number | null;
@@ -99,7 +100,8 @@ export const INVOICE_COLUMNS: readonly InvoiceColumn[] = [
   { key: "taxable_amount", label: "Taxable Value", kind: "money", width: 16, group: "GST and totals", get: (i) => i.taxable_amount },
   { key: "discount_amount", label: "Discount", kind: "money", width: 14, group: "GST and totals", get: (i) => i.discount_amount },
   { key: "cgst_amount", label: "CGST", kind: "money", width: 14, group: "GST and totals", get: (i) => i.cgst_amount },
-  { key: "sgst_amount", label: "SGST/UTGST", kind: "money", width: 14, group: "GST and totals", get: (i) => i.sgst_amount },
+  { key: "sgst_amount", label: "SGST", kind: "money", width: 14, group: "GST and totals", get: (i) => i.sgst_amount },
+  { key: "utgst_amount", label: "UTGST", kind: "money", width: 14, group: "GST and totals", get: (i) => i.utgst_amount ?? null },
   { key: "igst_amount", label: "IGST", kind: "money", width: 14, group: "GST and totals", get: (i) => i.igst_amount },
   { key: "cess_amount", label: "Cess", kind: "money", width: 12, group: "GST and totals", get: (i) => i.cess_amount },
   { key: "tax_total", label: "Total Tax", kind: "money", width: 14, group: "GST and totals", get: (i) => i.tax_total },
@@ -136,7 +138,7 @@ export const ITEM_COLUMNS: readonly ItemColumn[] = [
 // Defaults for a first export.
 export const DEFAULT_COLUMNS: readonly string[] = [
   "invoice_number", "invoice_date", "vendor_name", "vendor_gstin", "buyer_gstin", "place_of_supply",
-  "taxable_amount", "cgst_amount", "sgst_amount", "igst_amount", "cess_amount", "total_amount", "status", "flags_summary",
+  "taxable_amount", "cgst_amount", "sgst_amount", "utgst_amount", "igst_amount", "cess_amount", "total_amount", "status", "flags_summary",
 ];
 export const DEFAULT_ITEM_COLUMNS: readonly string[] = [
   "inv_invoice_number", "inv_vendor_name", "position", "description", "hsn_code", "quantity", "unit", "unit_price",

@@ -31,7 +31,7 @@ export const EXPORT_PROFILES: readonly ExportProfile[] = [
     label: "Standard (CSV / Excel)",
     formats: ["csv", "xlsx"],
     status: "available",
-    note: "Choose and order your own columns. Separate CGST, SGST, IGST and cess columns.",
+    note: "Choose and order your own columns. Separate CGST, SGST, UTGST, IGST and cess columns.",
   },
   {
     id: "tally",
