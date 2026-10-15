@@ -56,8 +56,8 @@ export function stateCodeFromGstin(gstin: string | null): string | null {
   return /^\d{2}$/.test(c) && STATE_NAMES[c] ? c : null;
 }
 
-const nz = (v: number | null): number => v ?? 0;
-const nonZero = (v: number | null): boolean => v !== null && v !== 0;
+const nz = (v: number | null | undefined): number => v ?? 0;
+const nonZero = (v: number | null | undefined): boolean => v !== null && v !== undefined && v !== 0;
 
 export interface GstOptions {
   tolerancePaise: number;
@@ -106,7 +106,7 @@ export function gstChecks(doc: Doc, items: StoredItem[], opts: GstOptions): Revi
 
   // 2. CGST equals the state-level tax (SGST + UTGST, each its own amount) on an intra-state supply. Compared as a SUM, so an
   // invoice with SGST lines and UTGST lines does not raise a false alarm, and SGST alone is never forced to equal CGST.
-  if (doc.cgst_amount !== null && (doc.sgst_amount !== null || doc.utgst_amount !== null) && nonZero(doc.cgst_amount) && (nonZero(doc.sgst_amount) || nonZero(doc.utgst_amount))) {
+  if (doc.cgst_amount !== null && ((doc.sgst_amount ?? null) !== null || (doc.utgst_amount ?? null) !== null) && nonZero(doc.cgst_amount) && (nonZero(doc.sgst_amount) || nonZero(doc.utgst_amount))) {
     const state = toPaise(doc.sgst_amount ?? 0) + toPaise(doc.utgst_amount ?? 0);
     if (Math.abs(toPaise(doc.cgst_amount) - state) > Math.min(tol, 100)) {
       flags.push({
@@ -155,7 +155,7 @@ export function gstChecks(doc: Doc, items: StoredItem[], opts: GstOptions): Revi
 
   if (allRated) {
     const headerTax = toPaise(nz(doc.cgst_amount)) + toPaise(nz(doc.sgst_amount)) + toPaise(nz(doc.utgst_amount)) + toPaise(nz(doc.igst_amount));
-    const headerKnown = taxAmounts.some((v) => v !== null);
+    const headerKnown = taxAmounts.some((v) => v !== null && v !== undefined);
     if (headerKnown && Math.abs(headerTax - expectedTotal) > tol) {
       flags.push({
         code: "invoice_tax_rate_mismatch", severity: "warning",
