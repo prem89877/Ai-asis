@@ -19,7 +19,7 @@ type Layout = "standard" | "tally";
 type TallyFmt = "xml" | "json" | "csv";
 interface TallySkip { invoiceId: string; invoiceNumber: string | null; reason: string }
 const TALLY_KEY = "ai-asis-tally-ledgers";
-const TALLY_LABELS: [keyof TallyConfig, string][] = [["voucherType", "Voucher type"], ["purchaseLedger", "Purchase ledger"], ["cgstLedger", "CGST ledger"], ["sgstLedger", "SGST ledger"], ["igstLedger", "IGST ledger"], ["cessLedger", "Cess ledger"], ["roundOffLedger", "Round-off ledger"], ["companyName", "Tally company (optional)"]];
+const TALLY_LABELS: [keyof TallyConfig, string][] = [["voucherType", "Voucher type"], ["purchaseLedger", "Purchase ledger"], ["cgstLedger", "CGST ledger"], ["sgstLedger", "SGST ledger"], ["utgstLedger", "UTGST ledger"], ["igstLedger", "IGST ledger"], ["cessLedger", "Cess ledger"], ["roundOffLedger", "Round-off ledger"], ["companyName", "Tally company (optional)"]];
 
 function move<T>(list: T[], i: number, by: -1 | 1): T[] {
   const j = i + by;
