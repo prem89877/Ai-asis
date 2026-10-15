@@ -6,7 +6,7 @@ import { AUDIT_SYSTEM_PROMPT, KEYFIGURES_SYSTEM_PROMPT, PARTIES_SYSTEM_PROMPT, V
 import { SOURCE_SYSTEM_PROMPT } from "../../lib/extraction/source-verify.ts";
 import { minimalPdf, png, sha } from "../helpers.mjs";
 
-export const BASE_CFG = { apiKey: "SECRET-KEY-123", model: "m", inputPricePerMTok: 0.3, outputPricePerMTok: 2.5, timeoutMs: 10_000, deadlineMs: 50_000, maxAttempts: 3, maxOutputTokens: 1000, verify: true, audit: true, totalCheck: true, partiesCheck: true, dynamicPrompt: true, sourceVerify: true, partiesRetries: 1 };
+export const BASE_CFG = { apiKey: "SECRET-KEY-123", model: "m", inputPricePerMTok: 0.3, outputPricePerMTok: 2.5, timeoutMs: 10_000, deadlineMs: 50_000, maxAttempts: 3, maxOutputTokens: 1000, verify: true, audit: true, totalCheck: true, partiesCheck: true, sourceVerify: true, partiesRetries: 1 };
 export const CHECK_CFG = { lowConfidence: 0.8, tolerancePaise: 100, lineFix: true, lineFixMaxConfidence: 0.95, dedupeRows: true, forex: true };
 
 export function roleOf(input) {
@@ -16,7 +16,7 @@ export function roleOf(input) {
     const props = JSON.stringify(input.responseSchema);
     return props.includes("printed_gstins") ? "parties" : props.includes("grand_total") ? "keyfigures" : "other";
   }
-  // verify / audit prompts are the fixed prompt + their own extra block (the dynamic section is added after it)
+  // verify / audit prompts are the fixed prompt + their own extra block
   if (sp.includes(AUDIT_SYSTEM_PROMPT.slice(AUDIT_SYSTEM_PROMPT.length - 200, AUDIT_SYSTEM_PROMPT.length - 20))) return "audit";
   if (sp.includes(VERIFY_SYSTEM_PROMPT.slice(VERIFY_SYSTEM_PROMPT.length - 200, VERIFY_SYSTEM_PROMPT.length - 20))) return "verify";
   return "first";
