@@ -18,6 +18,7 @@ export interface TallyConfig {
   purchaseLedger: string;
   cgstLedger: string;
   sgstLedger: string;
+  utgstLedger: string;
   igstLedger: string;
   cessLedger: string;
   roundOffLedger: string;
@@ -29,6 +30,7 @@ export const DEFAULT_TALLY_CONFIG: TallyConfig = {
   purchaseLedger: "Purchase",
   cgstLedger: "Input CGST",
   sgstLedger: "Input SGST",
+  utgstLedger: "Input UTGST",
   igstLedger: "Input IGST",
   cessLedger: "Input Cess",
   roundOffLedger: "Round Off",
@@ -95,6 +97,7 @@ export function buildVouchers(invoices: ExportInvoice[], config: TallyConfig): {
       { ledger: config.purchaseLedger, paise: toPaise(inv.taxable_amount) },
       { ledger: config.cgstLedger, paise: toPaise(inv.cgst_amount) },
       { ledger: config.sgstLedger, paise: toPaise(inv.sgst_amount) },
+      { ledger: config.utgstLedger, paise: toPaise(inv.utgst_amount ?? 0) }, // own ledger: UTGST is never booked to the SGST ledger
       { ledger: config.igstLedger, paise: toPaise(inv.igst_amount) },
       { ledger: config.cessLedger, paise: toPaise(inv.cess_amount) },
     ].filter((p) => p.paise !== 0);
