@@ -33,7 +33,7 @@ const COLUMNS: { key: SortKey; label: string; align?: "right" }[] = [
   { key: "invoice_number", label: "Invoice no." },
   { key: "invoice_date", label: "Date" },
   { key: "taxable_amount", label: "Taxable", align: "right" },
-  { key: "tax_total", label: "GST", align: "right" },
+  { key: "tax_total", label: "Tax (GST + cess)", align: "right" },
   { key: "total_amount", label: "Total", align: "right" },
   { key: "status", label: "Status" },
 ];
@@ -345,7 +345,7 @@ export function InvoiceReviewTable({ summary, refreshKey, selected, onSelectedCh
                         {[r.invoice_number, formatDay(r.invoice_date)].filter(Boolean).join(" · ") || r.original_filename}
                       </p>
                       {r.total_amount !== null && (
-                        <p className="mt-1 text-sm tabular-nums">Total {formatInr(r.total_amount)}<span className="text-ink-muted"> · GST {formatInr(r.tax_total) || "-"}</span></p>
+                        <p className="mt-1 text-sm tabular-nums">Total {formatInr(r.total_amount)}<span className="text-ink-muted"> · Tax {formatInr(r.tax_total) || "-"}</span></p>
                       )}
                       {chips(r)}
                       <div className="-ml-2 mt-1">{rowActions(r)}</div>
