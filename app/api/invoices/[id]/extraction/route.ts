@@ -33,7 +33,7 @@ export async function GET(_request: Request, { params }: { params: { id: string 
     supabase
       .from("extracted_data")
       .select(
-        "vendor_name, buyer_name, vendor_gstin, buyer_gstin, invoice_number, invoice_date, place_of_supply, currency, taxable_amount, discount_amount, cgst_amount, sgst_amount, igst_amount, cess_amount, total_amount, confidence, document_type, review_flags, field_status, extraction_model, extracted_at, updated_at, verified_at, edited_at, corrected_fields, items_edited"
+        "vendor_name, buyer_name, vendor_gstin, buyer_gstin, invoice_number, invoice_date, place_of_supply, currency, taxable_amount, discount_amount, cgst_amount, sgst_amount, utgst_amount, igst_amount, cess_amount, total_amount, confidence, document_type, review_flags, field_status, extraction_model, extracted_at, updated_at, verified_at, edited_at, corrected_fields, items_edited"
       )
       .eq("invoice_id", params.id)
       .eq("firm_id", membership.firmId)
