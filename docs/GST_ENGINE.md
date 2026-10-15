@@ -132,3 +132,8 @@ Some invoices print a per-line tax (or a combined rate) that is GST + cess. Read
 invoice, the line taxes add up to invoice GST + cess (and not to GST alone) within the rounding window, and the taxed lines are of one family
 (all CGST+SGST, all CGST+UTGST or all IGST). Then the cess is taken out of the line taxes and an info flag `line_tax_includes_cess` is added.
 Mixed families, no printed cess, or any other difference keep the old behaviour, so real errors stay visible. No stored amount is changed.
+
+**Mixed invoices.** With several tax families (for example IGST lines + CGST/SGST lines) the cess is taken out only when every family's lines reproduce
+their invoice head except exactly one, whose lines are higher by exactly the printed cess (IGST: IGST head; CGST+SGST: 2 x SGST; CGST+UTGST: 2 x UTGST).
+Cess spread over several families, a gap of any other size, or no printed cess is not adjusted and stays a mismatch. An IGST finding now lists
+each IGST line (position, taxable value, rate, tax) in `details.components[].lines`.
