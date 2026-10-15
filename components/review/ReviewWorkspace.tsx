@@ -1,13 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, FileText, Info, Plus, Trash2, X } from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, FileText, Info, Pencil, Plus, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { ReviewStatusBadge } from "@/components/ui/ReviewStatusBadge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { formatDay, formatInr } from "@/lib/format";
 import { DOCUMENT_TYPE_LABEL, EDITABLE_DOCUMENT_TYPES, HEADER_FIELDS, ITEM_FIELDS, MAX_ITEMS } from "@/lib/review/fields";
 import type { HeaderColumn, ItemColumn } from "@/lib/review/fields";
+import { checkHeaderDraft, checkItemsDraft, countIssues } from "@/lib/review/draft-check";
+import type { DraftIssue, HeaderIssues, ItemIssues } from "@/lib/review/draft-check";
 
 interface FieldMeta { state: string; confidence: number; autoCorrected?: { from: string; to: string } }
 interface Flag { code: string; severity: "error" | "warning" | "info"; field?: string; itemPosition?: number; message: string }
@@ -29,6 +31,20 @@ const flagStyle = {
   warning: { icon: AlertTriangle, cls: "border-amber-300 bg-amber-50 text-amber-900" },
   info: { icon: Info, cls: "border-slate-200 bg-slate-50 text-slate-700" },
 } as const;
+
+// A few extraction flags carry no field name. They are still shown next to the box they are about.
+const HEADER_FLAG_FALLBACK: Record<string, string> = {
+  possible_duplicate: "invoice_number",
+  tax_on_bill_of_supply: "document_type",
+  invoice_tax_rate_mismatch: "taxable_value",
+  tax_allocation_mismatch: "igst",
+  supplier_gstin_cancelled: "supplier_gstin",
+  supplier_gstin_not_yet_registered: "supplier_gstin",
+  supplier_gstin_inactive: "supplier_gstin",
+  supplier_gstin_blocked: "supplier_gstin",
+  composition_charging_tax: "supplier_gstin",
+};
+const ITEM_FLAG_FALLBACK: Record<string, string> = { arithmetic_line_mismatch: "taxable_value", negative_line_suspect: "taxable_value" };
 
 interface Props {
   invoiceId: string;
@@ -92,6 +108,12 @@ export function ReviewWorkspace({ invoiceId, neighborIds, onNavigate, onClose, o
     return JSON.stringify(items) !== JSON.stringify((JSON.parse(baseline) as { it: ItemDraft[] }).it);
   }, [items, baseline]);
 
+  // What the person typed (boxes that differ from the saved value): checked live, shown next to the box, separate from the AI flags.
+  const baseDraft = useMemo(() => (baseline ? (JSON.parse(baseline) as { h: HeaderDraft; it: ItemDraft[] }) : null), [baseline]);
+  const manualHeader = useMemo<HeaderIssues>(() => (header && baseDraft ? checkHeaderDraft(header, baseDraft.h) : {}), [header, baseDraft]);
+  const manualItems = useMemo<ItemIssues[]>(() => (baseDraft ? checkItemsDraft(items, baseDraft.it, header?.currency ?? "") : []), [items, baseDraft, header?.currency]);
+  const manualCount = useMemo(() => countIssues(manualHeader, manualItems), [manualHeader, manualItems]);
+
   const tryClose = useCallback(() => {
     if (dirty && !window.confirm("You have unsaved changes. Close without saving?")) return;
     onClose();
@@ -113,7 +135,10 @@ export function ReviewWorkspace({ invoiceId, neighborIds, onNavigate, onClose, o
   const order = { error: 0, warning: 1, info: 2 } as const;
   const sortedFlags = [...flags].sort((a, b) => order[a.severity] - order[b.severity]);
   const flagsByField = new Map<string, Flag[]>();
-  for (const f of flags) if (f.field && !f.itemPosition) flagsByField.set(f.field, [...(flagsByField.get(f.field) ?? []), f]);
+  for (const f of flags) {
+    const key = f.field ?? HEADER_FLAG_FALLBACK[f.code];
+    if (key && !f.itemPosition) flagsByField.set(key, [...(flagsByField.get(key) ?? []), f]);
+  }
 
   async function submit(action: "save" | "verify" | "unverify", acknowledge = false) {
     if (!data?.extracted || !header) return;
@@ -272,7 +297,10 @@ export function ReviewWorkspace({ invoiceId, neighborIds, onNavigate, onClose, o
                           const fieldFlags = flagsByField.get(f.statusKey) ?? [];
                           const corrected = data.extracted?.corrected_fields[f.column];
                           const low = !corrected && meta && (meta.state === "value" || meta.state === "zero") && meta.confidence < 0.8;
-                          const attention = fieldFlags.some((x) => x.severity !== "info") || low;
+                          const manual = manualHeader[f.column] ?? [];
+                          const edited = !!baseDraft && header[f.column] !== baseDraft.h[f.column];
+                          const aiNotes = fieldFlags.filter((x) => x.severity !== "info");
+                          const tone = manual.some((m) => m.severity === "error") || (!edited && aiNotes.some((x) => x.severity === "error")) ? "error" : manual.length > 0 || (!edited && aiNotes.length > 0) || low ? "warning" : null;
                           const id = `f-${f.column}`;
                           return (
                             <div key={f.column} className={f.column === "vendor_name" || f.column === "buyer_name" ? "sm:col-span-2" : undefined}>
@@ -292,10 +320,11 @@ export function ReviewWorkspace({ invoiceId, neighborIds, onNavigate, onClose, o
                                   maxLength={f.kind === "gstin" ? 15 : f.kind === "currency" ? 3 : f.maxLength}
                                   value={header[f.column]}
                                   onChange={(e) => setH(f.column, e.target.value)}
-                                  aria-invalid={attention || undefined}
-                                  className={`mt-1 h-11 w-full rounded-lg border bg-white px-3 text-sm ${f.kind === "amount" ? "tabular-nums" : ""} ${attention ? "border-amber-500 ring-1 ring-amber-300" : "border-slate-300"}`}
+                                  aria-invalid={tone ? true : undefined}
+                                  className={`mt-1 h-11 w-full rounded-lg border bg-white px-3 text-sm ${f.kind === "amount" ? "tabular-nums" : ""} ${toneClass(tone)}`}
                                 />
                               )}
+                              <FieldNotes ai={aiNotes} manual={manual} edited={edited} />
                               {f.kind === "gstin" && meta?.autoCorrected && (() => {
                                 const ac = meta.autoCorrected;
                                 const showingRaw = header[f.column] === ac.from;
@@ -331,21 +360,33 @@ export function ReviewWorkspace({ invoiceId, neighborIds, onNavigate, onClose, o
                       <ol className="mt-2 space-y-3">
                         {items.map((row, i) => {
                           const itemFlags = flags.filter((f) => f.itemPosition === i + 1 && f.severity !== "info");
+                          const flagKey = (f: Flag) => f.field ?? ITEM_FLAG_FALLBACK[f.code];
+                          const unkeyed = itemFlags.filter((f) => !ITEM_FIELDS.some((d) => d.statusKey === flagKey(f)));
+                          const manualRow = manualItems[i] ?? {};
+                          const hasManual = Object.values(manualRow).some((a) => (a ?? []).length > 0);
                           return (
-                            <li key={i} className={`rounded-lg border p-3 ${itemFlags.length ? "border-amber-400" : "border-slate-200"}`}>
+                            <li key={i} className={`rounded-lg border p-3 ${itemFlags.length || hasManual ? "border-amber-400" : "border-slate-200"}`}>
                               <div className="flex items-center justify-between">
                                 <span className="text-sm font-medium">Item {i + 1}</span>
                                 <button type="button" onClick={() => delItem(i)} aria-label={`Remove item ${i + 1}`} className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-red-700 hover:bg-red-50"><Trash2 className="h-4 w-4" aria-hidden /></button>
                               </div>
                               <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
-                                {ITEM_FIELDS.map((f) => (
-                                  <div key={f.key} className={f.key === "description" ? "col-span-2 sm:col-span-3" : undefined}>
-                                    <label htmlFor={`i${i}-${f.key}`} className="block text-xs text-ink-muted">{f.label}</label>
-                                    <input id={`i${i}-${f.key}`} type="text" autoComplete="off" inputMode={f.kind === "amount" ? "decimal" : f.kind === "hsn" ? "numeric" : undefined} value={row[f.key]} onChange={(e) => setItem(i, f.key, e.target.value)} className={`mt-0.5 h-10 w-full rounded-lg border border-slate-300 bg-white px-2 text-sm ${f.kind === "amount" ? "tabular-nums" : ""}`} />
-                                  </div>
-                                ))}
+                                {ITEM_FIELDS.map((f) => {
+                                  const manual = manualRow[f.key] ?? [];
+                                  const baseRow = baseDraft?.it[i];
+                                  const edited = baseRow ? row[f.key] !== baseRow[f.key] : row[f.key] !== "";
+                                  const ai = itemFlags.filter((x) => flagKey(x) === f.statusKey);
+                                  const tone = manual.some((m) => m.severity === "error") || (!edited && ai.some((x) => x.severity === "error")) ? "error" : manual.length > 0 || (!edited && ai.length > 0) ? "warning" : null;
+                                  return (
+                                    <div key={f.key} className={f.key === "description" ? "col-span-2 sm:col-span-3" : undefined}>
+                                      <label htmlFor={`i${i}-${f.key}`} className="block text-xs text-ink-muted">{f.label}</label>
+                                      <input id={`i${i}-${f.key}`} type="text" autoComplete="off" aria-invalid={tone ? true : undefined} inputMode={f.kind === "amount" ? "decimal" : f.kind === "hsn" ? "numeric" : undefined} value={row[f.key]} onChange={(e) => setItem(i, f.key, e.target.value)} className={`mt-0.5 h-10 w-full rounded-lg border bg-white px-2 text-sm ${f.kind === "amount" ? "tabular-nums" : ""} ${toneClass(tone)}`} />
+                                      <FieldNotes ai={ai} manual={manual} edited={edited} compact />
+                                    </div>
+                                  );
+                                })}
                               </div>
-                              {itemFlags.length > 0 && <ul className="mt-2 space-y-1 text-xs text-amber-900">{itemFlags.map((f, n) => <li key={n}>{f.message}</li>)}</ul>}
+                              {unkeyed.length > 0 && <ul className="mt-2 space-y-1 text-xs text-amber-900">{unkeyed.map((f, n) => <li key={n}>{f.message}</li>)}</ul>}
                             </li>
                           );
                         })}
@@ -369,11 +410,16 @@ export function ReviewWorkspace({ invoiceId, neighborIds, onNavigate, onClose, o
                   </div>
                 </div>
               )}
+              {manualCount.errors > 0 ? (
+                <p role="alert" className="mb-2 flex items-start gap-2 text-sm text-red-800"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />Fix the {manualCount.errors} red entr{manualCount.errors === 1 ? "y" : "ies"} marked &quot;Your entry&quot; before saving.</p>
+              ) : manualCount.warnings > 0 ? (
+                <p className="mb-2 flex items-start gap-2 text-sm text-amber-900"><Pencil className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />{manualCount.warnings} value{manualCount.warnings === 1 ? "" : "s"} you typed look{manualCount.warnings === 1 ? "s" : ""} wrong. Check the marked boxes. You can still save.</p>
+              ) : null}
               <div className="flex flex-wrap items-center justify-end gap-2">
                 {verified && !dirty && <Button variant="secondary" onClick={() => submit("unverify")} loading={busy === "unverify"} disabled={busy !== null}>Remove verification</Button>}
-                <Button variant="secondary" onClick={() => submit("save")} loading={busy === "save"} disabled={!dirty || busy !== null}>Save changes</Button>
+                <Button variant="secondary" onClick={() => submit("save")} loading={busy === "save"} disabled={!dirty || busy !== null || manualCount.errors > 0}>Save changes</Button>
                 {(!verified || dirty) && (
-                  <Button onClick={() => (dirty ? submitVerifyAfterSave() : submit("verify"))} loading={busy === "verify"} disabled={busy !== null}>
+                  <Button onClick={() => (dirty ? submitVerifyAfterSave() : submit("verify"))} loading={busy === "verify"} disabled={busy !== null || manualCount.errors > 0}>
                     <CheckCircle2 className="h-4 w-4" aria-hidden />
                     {dirty ? "Save and verify" : "Mark as verified"}
                   </Button>
@@ -390,6 +436,38 @@ export function ReviewWorkspace({ invoiceId, neighborIds, onNavigate, onClose, o
   function submitVerifyAfterSave() {
     void submit("verify");
   }
+}
+
+function toneClass(tone: "error" | "warning" | null): string {
+  return tone === "error" ? "border-red-500 ring-1 ring-red-300" : tone === "warning" ? "border-amber-500 ring-1 ring-amber-300" : "border-slate-300";
+}
+
+// Messages right under a box. Two kinds, labelled differently:
+//  "Invoice check"  = what the extraction checks found about the value the AI read (shown dimmed once the box is edited, because it
+//                     described the old value; everything is re-checked on save);
+//  "Your entry"     = what looks wrong in the text the person typed (live, before saving).
+function FieldNotes({ ai, manual, edited, compact }: { ai: Flag[]; manual: DraftIssue[]; edited: boolean; compact?: boolean }) {
+  if (ai.length === 0 && manual.length === 0) return null;
+  const size = compact ? "text-[11px]" : "text-xs";
+  return (
+    <ul className={`mt-1 space-y-1 ${size}`} aria-live="polite">
+      {ai.map((f, n) => {
+        const { icon: Icon, cls } = flagStyle[f.severity];
+        return (
+          <li key={`ai-${f.code}-${n}`} className={`flex items-start gap-1.5 rounded-md border px-2 py-1 ${cls} ${edited ? "opacity-60" : ""}`}>
+            <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span><b className="font-semibold">{edited ? "Invoice check (before your edit): " : "Invoice check: "}</b>{f.message}</span>
+          </li>
+        );
+      })}
+      {manual.map((m, n) => (
+        <li key={`me-${n}`} className={`flex items-start gap-1.5 rounded-md border px-2 py-1 ${m.severity === "error" ? "border-red-300 bg-red-50 text-red-900" : "border-amber-300 bg-amber-50 text-amber-900"}`}>
+          <Pencil className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span><b className="font-semibold">Your entry: </b>{m.message}</span>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 function PdfFallback({ url }: { url: string }) {
