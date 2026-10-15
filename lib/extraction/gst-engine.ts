@@ -13,6 +13,7 @@ import { describeIdentifierProblem, isValidAckNo, isValidEwayBill, isValidIrn } 
 import { toPaise } from "./normalize.ts";
 import { hasStateTax, known as knownAmt, reconcileHeads, splitLineTaxes, stateTaxPaise, taxHeadsPaise, totalTaxPaise } from "./tax-components.ts";
 import { checkTaxHeads, diagnoseTotalMismatch, type TaxRegime } from "./tax-math.ts";
+import { componentFlag, reconcileTaxComponents } from "./tax-reconcile.ts";
 import type { ReviewFlag, StoredExtracted, StoredItem } from "./types.ts";
 
 export { validateLineItem } from "./arithmetic.ts";
@@ -82,7 +83,9 @@ export function validateTaxAllocation(e: StoredExtracted, items: StoredItem[], t
     } else if (Math.abs(split.sgst + split.utgst - stateH) > tol) bad.push(split.utgst > 0 && split.sgst === 0 ? "UTGST" : "SGST");
     const discrepancies = reconcileHeads(heads, utKnown ? split : { ...split, sgst: split.sgst + split.utgst, utgst: 0 }, tol);
     if (bad.length > 0) {
-      flags.push({
+      // Each failed head is explained on its own: field, expected value (from the lines), observed value (on the invoice), reason.
+      const explained = reconcileTaxComponents(e, items, tolerancePaise).heads;
+      const base: ReviewFlag = {
         code: "tax_allocation_mismatch", severity: "warning",
         message: `The ${bad.join(", ")} of the individual lines does not add up to the invoice ${bad.join(", ")}. Check the original.`,
         details: {
@@ -90,7 +93,13 @@ export function validateTaxAllocation(e: StoredExtracted, items: StoredItem[], t
           invoiceIgst: igstH / 100, invoiceCgst: cgstH / 100, invoiceSgst: heads.sgst / 100, invoiceUtgst: heads.utgst / 100,
           mismatchedHeads: bad, discrepancies,
         },
-      });
+      };
+      if (explained.length > 0) {
+        const detailed = componentFlag("tax_allocation_mismatch", explained);
+        flags.push({ ...base, field: detailed.field, message: detailed.message, details: { ...base.details, ...detailed.details } });
+      } else {
+        flags.push(base);
+      }
     } else if (mixed) {
       flags.push({ code: "mixed_tax_invoice", severity: "info", message: "IGST and CGST/SGST/UTGST are both charged. This is allowed when different lines carry different taxes, and every line adds up." });
     }
@@ -180,11 +189,15 @@ export interface TotalsResult {
   calculatedTotal: number | null; // INR, the calculated figure the printed total was compared with
   roundOffApplied: number | null; // INR, signed, set only when a difference was absorbed
   roundOffAbsorbed: number; // INR, absolute size of the absorbed difference (0 when none)
+  // What the printed discount did to the printed total: "deducted_after_tax" (total = taxable + taxes + TCS - discount),
+  // "not_in_total" (a discount is printed but the total reproduces without it: it is already inside the taxable value, or only informational),
+  // "none" (no discount printed), null when the total was not checked or did not match.
+  discountTreatment: "deducted_after_tax" | "not_in_total" | "none" | null;
 }
 
 const NOT_CHECKED = (flags: ReviewFlag[]): TotalsResult => ({
   flags, passed: null, status: "NOT_CHECKED", matchedTier: null, expectedGrandTotal: null, expectedNetPayable: null,
-  calculatedTotal: null, roundOffApplied: null, roundOffAbsorbed: 0,
+  calculatedTotal: null, roundOffApplied: null, roundOffAbsorbed: 0, discountTreatment: null,
 });
 
 export function validateInvoiceTotals(e: StoredExtracted, items: StoredItem[], opts: EngineOptions): TotalsResult {
@@ -232,14 +245,14 @@ export function validateInvoiceTotals(e: StoredExtracted, items: StoredItem[], o
   if (charges !== null) bases.push(base0 + charges); // charges only added to the taxable base, not inside it
 
   // Every figure the printed total may legitimately be. Tier 1 is listed before Tier 2, so on a tie Tier 1 wins.
-  interface Variant { value: number; rel: number; tier: TotalTier }
+  interface Variant { value: number; rel: number; tier: TotalTier; disc?: boolean } // disc = the printed discount was deducted after tax in this reading
   const variants: Variant[] = [];
   for (const b of bases) {
     variants.push({ value: tier1(b), rel: 0, tier: "grand_total" });
-    if (disc !== null) variants.push({ value: tier1(b) - disc, rel: 0, tier: "grand_total" });
+    if (disc !== null) variants.push({ value: tier1(b) - disc, rel: 0, tier: "grand_total", disc: true });
     if (tds !== 0) {
       variants.push({ value: tier2(b), rel: 0, tier: "net_payable" });
-      if (disc !== null) variants.push({ value: tier2(b) - disc, rel: 0, tier: "net_payable" });
+      if (disc !== null) variants.push({ value: tier2(b) - disc, rel: 0, tier: "net_payable", disc: true });
     }
   }
   if (foreignRate !== null) { // total printed in the foreign currency while taxable and taxes are in INR
@@ -272,6 +285,7 @@ export function validateInvoiceTotals(e: StoredExtracted, items: StoredItem[], o
     calculatedTotal: matched ? calcPaise / 100 : expectedGrand,
     roundOffApplied: roundOffApplied === null ? null : roundOffApplied / 100,
     roundOffAbsorbed: roundOffApplied === null ? 0 : Math.abs(roundOffApplied) / 100,
+    discountTreatment: !matched ? null : b.disc ? "deducted_after_tax" : disc !== null && disc !== 0 ? "not_in_total" : "none",
   });
 
   let matched = false;
@@ -296,7 +310,8 @@ export function validateInvoiceTotals(e: StoredExtracted, items: StoredItem[], o
   }
 
   if (!matched) {
-    const absent = (["cgst", "sgst", "igst", "cess"] as const) // utgst_amount is optional (most invoices have none), so its absence is never reported.filter((k) => fs[k]?.state === "missing");
+    // utgst_amount is optional (most invoices have none), so its absence is never reported here.
+    const absent = (["cgst", "sgst", "igst", "cess"] as const).filter((k) => fs[k]?.state === "missing");
     // Second layer (tax-math.ts): which single tax head, if left out or counted twice, would explain the printed total?
     const lineImplied = items.length > 0 && items.every((it) => has(it.gst_rate) && has(it.taxable_amount))
       ? items.reduce((a, it) => a + toPaise(((it.taxable_amount as number) * (it.gst_rate as number)) / 100), 0)
@@ -308,10 +323,18 @@ export function validateInvoiceTotals(e: StoredExtracted, items: StoredItem[], o
     const headTax = Math.abs(p(e.cgst_amount)) + Math.abs(p(e.sgst_amount)) + Math.abs(p(e.utgst_amount)) + Math.abs(p(e.igst_amount));
     const taxDisagrees = lineImplied !== null && foreignRate === null && Math.abs(Math.abs(lineImplied) - headTax) > tol + items.length;
     const netPrinted = has(e.net_payable_amount) ? toPaise(e.net_payable_amount) : null;
+    const money = (v: number) => `INR ${(v / 100).toFixed(2)}`;
+    const reason = causes.length > 0 ? causes[0].message : "The printed total does not equal taxable value + CGST + SGST + UTGST + IGST + cess (+ TCS, - printed discount) and no single tax head explains the gap.";
     flags.push({
       code: "arithmetic_total_mismatch", severity: "error", field: "grand_total",
-      message: `Taxable value plus taxes (plus TCS, less TDS where printed) does not equal the grand total or the net payable.${causes.length > 0 ? ` Most likely: ${causes[0].message}` : ""}`,
+      message: `Taxable value plus taxes (plus TCS, less TDS where printed) does not equal the grand total or the net payable. Expected ${money(tier1(base0))}, found ${money(actual)} (difference ${money(actual - tier1(base0))}).${causes.length > 0 ? ` Most likely: ${causes[0].message}` : ""}`,
       details: {
+        field: "grand_total", observed: actual / 100, reason, // expected / extracted / difference below, per component in `components`
+        difference: (actual - tier1(base0)) / 100,
+        components: {
+          taxable: base0 / 100, cgst: p(e.cgst_amount) / 100, sgst: p(e.sgst_amount) / 100, utgst: p(e.utgst_amount) / 100, igst: p(e.igst_amount) / 100, cess: p(e.cess_amount) / 100,
+          tcs: tcs / 100, tds: tds / 100, discount: disc === null ? null : disc / 100, preTaxCharges: charges === null ? null : charges / 100,
+        },
         ...(causes.length > 0 ? { likelyCauses: causes } : {}),
         ...(taxDisagrees ? { taxFromLineRates: Math.abs(lineImplied as number) / 100, taxPrintedOnInvoice: headTax / 100 } : {}),
         expected: expectedGrand, extracted: actual / 100, taxFieldsNotFound: absent,
@@ -325,19 +348,28 @@ export function validateInvoiceTotals(e: StoredExtracted, items: StoredItem[], o
     return verdict(false);
   }
 
-  flags.push(...checkNetPayable(e, actual, b.tier, tds, printedRo, absorbMax));
+  flags.push(...checkNetPayable(e, actual, b.tier, tds, printedRo, absorbMax, b.disc === true ? null : disc));
+  flags.push(...checkAdjustmentConfusion(e, tcs, tds, disc, absorbMax));
   return verdict(true, absorbed);
 }
 
 // The printed net_payable_amount against the printed total. Which of the two it must equal depends on the tier the
 // printed total reproduced: a Tier 1 total is before TDS (net = total - TDS); a Tier 2 total already is the net figure.
-function checkNetPayable(e: StoredExtracted, actual: number, tier: TotalTier, tds: number, printedRo: number, absorbMax: number): ReviewFlag[] {
+// `postTotalDiscount` = the printed commercial discount (paise) when the printed total is BEFORE it (the total was reproduced without it),
+// so a net payable that is lower by exactly that discount is explained. It is null when the total already is net of the discount.
+function checkNetPayable(e: StoredExtracted, actual: number, tier: TotalTier, tds: number, printedRo: number, absorbMax: number, postTotalDiscount: number | null = null): ReviewFlag[] {
   if (!has(e.net_payable_amount)) return [];
   const net = toPaise(e.net_payable_amount);
   const expected = tier === "grand_total" ? actual - tds : actual;
   const diff = net - expected;
   // Round-off is sometimes applied to the net figure instead of the grand total, so the same INR 2.00 window applies.
   if (Math.abs(diff) <= absorbMax || (printedRo !== 0 && Math.abs(diff - printedRo) <= absorbMax)) return [];
+  // A commercial discount printed under the subtotal lowers the amount payable. It is NOT a TDS deduction, so it must neither be
+  // reported as a missing TDS nor as a net-payable mismatch.
+  if (postTotalDiscount !== null && postTotalDiscount > 0) {
+    const withDiscount = net - (expected - postTotalDiscount);
+    if (Math.abs(withDiscount) <= absorbMax || (printedRo !== 0 && Math.abs(withDiscount - printedRo) <= absorbMax)) return [];
+  }
   if (tier === "grand_total" && !nonZero(e.tds_amount)) {
     // Net payable is lower than the grand total and no TDS was read: most likely the TDS line was not captured.
     return [{
@@ -353,6 +385,24 @@ function checkNetPayable(e: StoredExtracted, actual: number, tier: TotalTier, td
       : "The net payable does not equal the printed total, which already matches the figure after TDS. Check the original.",
     details: { expected: expected / 100, extracted: net / 100, grandTotalTier: tier, ...(tds !== 0 ? { tds: tds / 100 } : {}) },
   }];
+}
+
+// TCS and TDS are withholding / collection items; a commercial discount is a price reduction. When a TCS or TDS figure is exactly
+// the printed discount, one of them was probably copied into the wrong field. Both are kept as read and a person is asked to look.
+function checkAdjustmentConfusion(e: StoredExtracted, tcs: number, tds: number, disc: number | null, absorbMax: number): ReviewFlag[] {
+  if (disc === null || disc === 0) return [];
+  const out: ReviewFlag[] = [];
+  const d = Math.abs(disc);
+  for (const [amount, field, label, role] of [[tds, "tds_amount", "TDS", "withheld from the payment"], [tcs, "tcs_amount", "TCS", "collected on top of the invoice"]] as const) {
+    if (amount !== 0 && Math.abs(amount - d) <= Math.min(absorbMax, 100)) {
+      out.push({
+        code: `${label.toLowerCase()}_matches_discount`, severity: "warning", field,
+        message: `The ${label} (INR ${(amount / 100).toFixed(2)}) is exactly the printed discount. ${label} is ${role}; a commercial discount only reduces the invoice value. One of them may have been copied into the wrong field. Check the original.`,
+        details: { field, observed: amount / 100, expected: 0, reason: `${label} equals the discount figure`, discount: d / 100 },
+      });
+    }
+  }
+  return out;
 }
 
 // ---- e-invoice / e-way bill metadata: format notes only, never part of a calculation ----------------------------------
@@ -508,6 +558,23 @@ export interface ValidationSummary {
   line_checks: { checked: number; failed: number };
   negative_lines?: { positions: number[]; status: NegativeLines["status"] };
   tax_regime?: TaxRegime; // supplier state vs place of supply: which tax heads are expected (CGST+SGST, CGST+UTGST or IGST)
+  // Each GST head against the lines (tax-reconcile.ts). total_gst = CGST + SGST + UTGST + IGST, each head once; cess is not GST.
+  tax_components?: {
+    basis: "labelled_lines" | "supply_type" | "none";
+    invoice: { cgst: number; sgst: number; utgst: number; igst: number; cess: number; total_gst: number };
+    lines: { cgst: number; sgst: number; utgst: number; igst: number } | null;
+    failed: string[]; // fields that disagree, e.g. ["utgst_amount"]
+  };
+  // Explicit adjustments, kept apart so a discount is never read as TCS / TDS and the printed figures reconcile as printed.
+  adjustments?: {
+    tcs: number; // INR, added after tax, inside the grand total (0 = none printed / not applied)
+    tds: number; // INR, withheld from the payment, not inside the grand total
+    tcs_tds_applied: boolean;
+    discount: number | null; // INR, as printed
+    discount_treatment: TotalsResult["discountTreatment"];
+    round_off: number | null;
+    net_payable_printed: number | null;
+  };
 }
 
 export interface InvoiceValidation {
@@ -529,7 +596,21 @@ export function validateInvoice(data: InvoiceData, opts: EngineOptions): Invoice
   const verification = tripleCheckTax(e, items, opts.tolerancePaise);
   const heads = checkTaxHeads(e, items, opts.tolerancePaise); // second layer: each tax head on its own (tax-math.ts)
 
-  const flags: ReviewFlag[] = [...lineFlags, ...totals.flags, ...alloc.flags, ...heads.flags, ...neg.flags, ...meta]; // the cross-check verdict is kept in the summary, not as a flag, so clean invoices stay flag-free
+  // Third layer: every GST head rebuilt from the lines on its own (tax-reconcile.ts), so a correct grand total never hides a wrong
+  // breakdown. When the lines are labelled, alloc.flags already carries the head findings (with field / expected / observed / reason).
+  const rec = reconcileTaxComponents(e, items, opts.tolerancePaise);
+  const componentFlags: ReviewFlag[] = [];
+  if (rec.basis !== "labelled_lines" && rec.heads.length > 0) componentFlags.push(componentFlag("tax_component_mismatch", rec.heads));
+  if (rec.cess) componentFlags.push(componentFlag("tax_component_mismatch", [rec.cess]));
+  if (rec.totalGst) componentFlags.push(componentFlag("tax_component_mismatch", [rec.totalGst]));
+  const failedFields = [...rec.heads, ...(rec.cess ? [rec.cess] : []), ...(rec.totalGst ? [rec.totalGst] : [])].map((f) => f.field);
+  if (rec.heads.length > 0 || rec.totalGst) {
+    // A matching grand total is not enough: when a head disagrees with the lines the tax cross-check is NOT verified.
+    if (verification.level !== "unverified") verification.level = "unverified";
+    if (!verification.disagreeing.includes("component_heads")) verification.disagreeing.push("component_heads");
+  }
+
+  const flags: ReviewFlag[] = [...lineFlags, ...totals.flags, ...alloc.flags, ...componentFlags, ...heads.flags, ...neg.flags, ...meta]; // the cross-check verdict is kept in the summary, not as a flag, so clean invoices stay flag-free
   const lineFails = lineFlags.filter((f) => f.code === "arithmetic_line_mismatch").length;
   const summary: ValidationSummary = {
     version: 1,
@@ -547,6 +628,20 @@ export function validateInvoice(data: InvoiceData, opts: EngineOptions): Invoice
     verification,
     line_checks: { checked: items.length, failed: lineFails },
     tax_regime: heads.regime,
+    tax_components: {
+      basis: rec.basis,
+      invoice: { cgst: p(e.cgst_amount) / 100, sgst: p(e.sgst_amount) / 100, utgst: p(e.utgst_amount) / 100, igst: p(e.igst_amount) / 100, cess: p(e.cess_amount) / 100, total_gst: rec.totals.fromComponents },
+      lines: rec.lineSplit ? { cgst: rec.lineSplit.cgst, sgst: rec.lineSplit.sgst, utgst: rec.lineSplit.utgst, igst: rec.lineSplit.igst } : null,
+      failed: Array.from(new Set(failedFields)),
+    },
+    adjustments: {
+      tcs: Math.abs(p(e.tcs_amount)) / 100, tds: Math.abs(p(e.tds_amount)) / 100,
+      tcs_tds_applied: Math.abs(p(e.tcs_amount)) !== 0 || Math.abs(p(e.tds_amount)) !== 0,
+      discount: e.discount_amount === null ? null : e.discount_amount,
+      discount_treatment: totals.discountTreatment,
+      round_off: has(e.round_off_amount) ? e.round_off_amount : null,
+      net_payable_printed: has(e.net_payable_amount) ? e.net_payable_amount : null,
+    },
     ...(neg.positions.length > 0 && neg.status !== "not_applicable" ? { negative_lines: { positions: neg.positions, status: neg.status } } : {}),
   };
   return {

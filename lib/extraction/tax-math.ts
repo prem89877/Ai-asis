@@ -71,11 +71,17 @@ export function checkTaxHeads(e: StoredExtracted, items: StoredItem[], tolerance
   // 1. CGST and SGST / UTGST are always equal on one invoice (each is half of the GST rate).
   // State-level side = SGST + UTGST (each counted once). Equal to CGST on every intra-state line, so equal in total too.
   const cg = p(e.cgst_amount), sg = p(e.sgst_amount) + p(e.utgst_amount);
+  // CGST agrees with the state-level tax once a UTGST of exactly the gap is added: a Union Territory figure was probably not read.
+  const missingUtgstHint = !has(e.utgst_amount) && cg > sg && Math.abs((cg - sg) - sg) <= tol ? ", or a separate UTGST (Union Territory GST) figure is printed and was not read" : "";
   if (has(e.cgst_amount) && (has(e.sgst_amount) || has(e.utgst_amount)) && (cg !== 0 || sg !== 0) && !memo && Math.abs(Math.abs(cg) - Math.abs(sg)) > tol) {
     flags.push({
       code: "cgst_sgst_unequal", severity: "warning", field: "sgst",
-      message: `CGST (INR ${(cg / 100).toFixed(2)}) and ${stateLabel} (INR ${(sg / 100).toFixed(2)}) are different. They are charged at the same amount, so one of them was probably misread. Check the original.`,
-      details: { cgst: cg / 100, sgst: p(e.sgst_amount) / 100, utgst: p(e.utgst_amount) / 100, stateTax: sg / 100, difference: Math.abs(Math.abs(cg) - Math.abs(sg)) / 100, stateTaxHead: stateHead },
+      message: `${stateLabel}: expected INR ${(cg / 100).toFixed(2)} (equal to CGST), found INR ${(sg / 100).toFixed(2)}. CGST and ${stateLabel} are charged at the same amount, so one of them was probably misread${missingUtgstHint}. Check the original.`,
+      details: {
+        cgst: cg / 100, sgst: p(e.sgst_amount) / 100, utgst: p(e.utgst_amount) / 100, stateTax: sg / 100, difference: Math.abs(Math.abs(cg) - Math.abs(sg)) / 100, stateTaxHead: stateHead,
+        field: "sgst", expected: cg / 100, observed: sg / 100,
+        reason: `CGST (INR ${(cg / 100).toFixed(2)}) must equal the state-level tax (SGST + UTGST, INR ${(sg / 100).toFixed(2)}).${missingUtgstHint}`,
+      },
     });
   }
 

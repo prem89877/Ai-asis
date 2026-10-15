@@ -127,7 +127,7 @@ export const BOTTOM_LINE_DESCRIPTIONS: Record<(typeof BOTTOM_LINE_FIELDS)[number
   tcs_amount: "Tax Collected at Source (Sec 206C) as printed in the bottom summary. Added after tax and already inside grand_total. Positive number.",
   tds_amount: "Tax Deducted at Source / withholding (Sec 194Q) as printed in the bottom summary. Deducted from the payment, NOT inside grand_total. Positive number.",
   round_off_amount: "Printed round-off / rounding adjustment. Negative when it reduces the total, positive when it increases it.",
-  net_payable_amount: "Amount payable after the TDS deduction, only when printed as its own figure. Missing when the document shows a single total.",
+  net_payable_amount: "Amount payable after the TDS deduction or after a printed commercial discount, only when printed as its own figure. Missing when the document shows a single total.",
 };
 
 function fieldSchema(valueType: "STRING" | "NUMBER", description?: string) {
