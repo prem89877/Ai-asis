@@ -18,7 +18,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const HEADER_SELECT =
-  "vendor_name, buyer_name, vendor_gstin, buyer_gstin, invoice_number, invoice_date, place_of_supply, currency, document_type, taxable_amount, discount_amount, cgst_amount, sgst_amount, igst_amount, cess_amount, total_amount, exchange_rate, tcs_amount, tds_amount, pre_tax_charges, round_off_amount, net_payable_amount, irn, ack_no, eway_bill_no, field_status, corrected_fields, updated_at";
+  "vendor_name, buyer_name, vendor_gstin, buyer_gstin, invoice_number, invoice_date, place_of_supply, currency, document_type, taxable_amount, discount_amount, cgst_amount, sgst_amount, utgst_amount, igst_amount, cess_amount, total_amount, exchange_rate, tcs_amount, tds_amount, pre_tax_charges, round_off_amount, net_payable_amount, irn, ack_no, eway_bill_no, field_status, corrected_fields, updated_at";
 
 function numOrNull(v: unknown): number | null {
   return v === null || v === undefined ? null : Number(v);
@@ -74,7 +74,7 @@ export async function PUT(request: Request, { params }: { params: { id: string }
   const currentHeader = {} as HeaderValues;
   for (const col of HEADER_COLUMNS) {
     const v = row[col];
-    currentHeader[col] = ["taxable_amount", "discount_amount", "cgst_amount", "sgst_amount", "igst_amount", "cess_amount", "total_amount"].includes(col)
+    currentHeader[col] = ["taxable_amount", "discount_amount", "cgst_amount", "sgst_amount", "utgst_amount", "igst_amount", "cess_amount", "total_amount"].includes(col)
       ? numOrNull(v)
       : ((v as string | null) ?? null);
   }
