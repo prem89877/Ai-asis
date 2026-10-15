@@ -11,7 +11,6 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join } from "node:path";
 import { getGeminiConfig } from "../lib/extraction/config.ts";
 import { callGemini, estimateCostUsd } from "../lib/extraction/gemini.ts";
-import { buildDynamicPrompt, composeSystemPrompt } from "../lib/extraction/dynamic-prompt.ts";
 import { SYSTEM_PROMPT } from "../lib/extraction/prompt.ts";
 import { preflight } from "../lib/extraction/preflight.ts";
 import { validateModelOutput } from "../lib/extraction/schema.ts";
@@ -58,9 +57,7 @@ for (const tf of truthFiles) {
       const mime = MIME[truth.file.split(".").pop().toLowerCase()];
       const pre = preflight(bytes, { expectedMime: mime, maxPdfPages: 10 });
       if (!pre.ok) { perFile.push({ label, note: `preflight: ${pre.code}` }); continue; }
-      // Same prompt path as production: EXTRACTION_DYNAMIC_PROMPT=off scores the fixed prompt alone, so the two can be compared.
-      const dyn = cfg.dynamicPrompt ? buildDynamicPrompt({ mime, pages: pre.pages, width: pre.width, height: pre.height }) : null;
-      const res = await callGemini({ apiKey: cfg.apiKey, model: cfg.model, mime, data: bytes, timeoutMs: cfg.timeoutMs, maxOutputTokens: cfg.maxOutputTokens, ...(dyn ? { systemPrompt: composeSystemPrompt(SYSTEM_PROMPT, dyn), userPrompt: dyn.userPrompt } : {}) });
+      const res = await callGemini({ apiKey: cfg.apiKey, model: cfg.model, mime, data: bytes, timeoutMs: cfg.timeoutMs, maxOutputTokens: cfg.maxOutputTokens, highResolution: cfg.highResolution !== false });
       apiCalls += 1;
       if (res.usage) cost += estimateCostUsd(res.usage, cfg.inputPricePerMTok, cfg.outputPricePerMTok);
       if (!res.ok) { perFile.push({ label, note: `provider: ${res.code}` }); continue; }

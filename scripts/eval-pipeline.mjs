@@ -5,7 +5,7 @@
 //     node --experimental-strip-types scripts/eval-pipeline.mjs
 //     A scripted provider returns hand-written readings with injected errors (tests/helpers/eval-dataset.mjs). This measures what the
 //     pipeline's CODE does with a given set of readings (voting, checks, source verification, false corrections, review flags).
-//     It does NOT measure how often the real model misreads an invoice, and it cannot show the effect of the dynamic prompt.
+//     It does NOT measure how often the real model misreads an invoice,.
 //
 //   Live (calls Gemini, costs money; the only mode that can measure real accuracy, latency and cost):
 //     GEMINI_API_KEY=... node --experimental-strip-types scripts/eval-pipeline.mjs --mode live [--runs 3] [--dir tests/fixtures]
@@ -30,9 +30,9 @@ const jsonOut = opt("--json", null);
 
 const CHECK_CFG = { lowConfidence: 0.8, tolerancePaise: 100, lineFix: true, lineFixMaxConfidence: 0.95, dedupeRows: true, forex: true };
 const CONFIGS = [
-  { name: "first-reading-only", note: "every extra layer off", flags: { verify: false, audit: false, totalCheck: false, partiesCheck: false, dynamicPrompt: false, sourceVerify: false } },
-  { name: "baseline", note: "all layers before Part 1 and Part 3: second / audit / key-figures / parties readings, vote, line fix; dynamic prompt and source verification OFF", flags: { dynamicPrompt: false, sourceVerify: false } },
-  { name: "updated", note: "current defaults: dynamic prompt ON, source verification ON", flags: {} },
+  { name: "first-reading-only", note: "every extra layer off", flags: { verify: false, audit: false, totalCheck: false, partiesCheck: false, sourceVerify: false } },
+  { name: "baseline", note: "all layers before Part 1 and Part 3: second / audit / key-figures / parties readings, vote, line fix; source verification OFF", flags: { sourceVerify: false } },
+  { name: "updated", note: "current defaults: zoom ON, source verification ON", flags: {} },
 ];
 
 // ---- scoring ---------------------------------------------------------------------------------------------------------------------
