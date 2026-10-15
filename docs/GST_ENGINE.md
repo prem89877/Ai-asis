@@ -59,3 +59,17 @@ Runs inside `validateInvoice()` next to the main checks. It never changes an ext
 
 **UTGST.** There is no separate UTGST field: UTGST is saved in `sgst_amount` (labelled "SGST / UTGST" on the review screen and in exports). `summary.tax_regime` tells which head to expect from the supplier GSTIN state and the place of supply: same state = CGST+SGST (CGST+UTGST for UT codes 04, 26, 31, 35, 38), different state = IGST. Delhi, Puducherry and J&K charge SGST.
 `normalizeAppliedTaxType()` now accepts any label that names CGST together with SGST or UTGST.
+
+## UTGST is its own tax head (migration 014)
+
+- Stored fields: `cgst_amount`, `sgst_amount`, `utgst_amount`, `igst_amount`, `cess_amount`. UTGST is never merged into SGST.
+- `lib/extraction/tax-components.ts` is the single place that adds the heads (integer paise): total GST = CGST + SGST + UTGST + IGST,
+  cess is added separately. Verification layers, review checks, exports and Tally all use it.
+- CGST is compared with the state-level SUM (SGST + UTGST), never with SGST alone, so mixed invoices
+  (IGST lines + CGST/SGST lines + CGST/UTGST lines) reconcile. Line types: `IGST`, `CGST_SGST`, `CGST_UTGST`, `NONE`.
+- Legacy rows: `utgst_amount` NULL means "not printed"; `sgst_amount` keeps its old "SGST / UTGST" meaning and is simply
+  added, so nothing is lost or double counted. An optional, commented backfill is at the end of migration 014.
+- Tolerance: INR 2.00 round-off window (`ROUND_OFF_MAX_PAISE`) plus one paisa per line. Nothing silently changes an extracted
+  amount, and the printed grand total is never edited to make a reconciliation pass.
+- Discrepancies are specific: `tax_allocation_mismatch` lists the mismatched heads with invoice / lines / difference per head;
+  `arithmetic_total_mismatch` lists likely causes (for example `utgst_not_read`).
