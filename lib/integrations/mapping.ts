@@ -10,14 +10,14 @@ export type Guard = "none" | "excel";
 // Fields that may be synced. Labels are the default header texts (taken from the export columns, so CSV, Excel and sheets agree).
 const SYNC_KEYS = [
   "invoice_number", "invoice_date", "vendor_name", "vendor_gstin", "buyer_name", "buyer_gstin", "place_of_supply", "document_type", "currency",
-  "taxable_amount", "discount_amount", "cgst_amount", "sgst_amount", "igst_amount", "cess_amount", "tax_total", "total_amount",
+  "taxable_amount", "discount_amount", "cgst_amount", "sgst_amount", "utgst_amount", "igst_amount", "cess_amount", "tax_total", "total_amount",
   "verified_at", "original_filename", "id",
 ] as const;
 const COLUMN_BY_KEY = new Map<string, InvoiceColumn>(INVOICE_COLUMNS.map((c) => [c.key, c]));
 export const SYNC_FIELDS: readonly { key: string; label: string }[] = SYNC_KEYS.map((k) => ({ key: k, label: COLUMN_BY_KEY.get(k)?.label ?? k }));
 export const DEFAULT_SYNC_FIELDS: readonly string[] = [
   "invoice_number", "invoice_date", "vendor_name", "vendor_gstin", "buyer_name", "buyer_gstin", "place_of_supply",
-  "taxable_amount", "cgst_amount", "sgst_amount", "igst_amount", "cess_amount", "total_amount", "verified_at", "id",
+  "taxable_amount", "cgst_amount", "sgst_amount", "utgst_amount", "igst_amount", "cess_amount", "total_amount", "verified_at", "id",
 ];
 const FIELD_KEYS = new Set<string>(SYNC_KEYS);
 const MAX_COLUMNS = 60;
