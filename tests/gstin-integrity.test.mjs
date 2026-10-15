@@ -74,16 +74,17 @@ test("3. missing GSTIN stays empty: no value is invented, and the field is not m
 });
 
 // ---- 4. Ambiguous character ---------------------------------------------------------------------------------------------------
-test("4. an ambiguous character (O/0, I/1, B/8, S/5) is never swapped silently: the read value stays, the fix is only suggested", () => {
-  const cases = [["27AAPFUO939F1ZV", "27AAPFU0939F1ZV"], ["27AAPFU0939F1ZV".replace("1Z", "IZ"), VALID]];
-  for (const [printed, expected] of cases) {
+test("4. an ambiguous character in the first 14 characters is never swapped and never guessed; a wrong last character gets the one computed fix", () => {
+  for (const printed of ["27AAPFUO939F1ZV", VALID.replace("1Z", "IZ")]) {
     const e = norm(model({ supplier_gstin: f(printed, 0.99) }), { agreed: new Set(["supplier_gstin"]) });
     assert.equal(e.vendor_gstin, printed);
-    const fl = e.review_flags.find((x) => x.field === "supplier_gstin" && x.details?.suggestions);
-    assert.ok(fl, printed);
-    assert.ok(fl.details.suggestions.includes(expected));
+    // Whatever is suggested keeps the first 14 characters exactly as read (only the last character may differ).
+    for (const fl of e.review_flags.filter((x) => x.field === "supplier_gstin" && x.details?.suggestions)) for (const sg of fl.details.suggestions) assert.equal(sg.slice(0, 14), printed.slice(0, 14), printed);
     assert.ok(!e.review_flags.some((x) => x.code === "gstin_auto_corrected"));
   }
+  const e = norm(model({ supplier_gstin: f("27AAPFU0939F1ZW", 0.99) }), { agreed: new Set(["supplier_gstin"]) });
+  assert.equal(e.vendor_gstin, "27AAPFU0939F1ZW");
+  assert.deepEqual(e.review_flags.find((x) => x.field === "supplier_gstin" && x.details?.suggestions).details.suggestions, [VALID]);
 });
 
 // ---- 5. A validator proposing another value without enough evidence ------------------------------------------------------------

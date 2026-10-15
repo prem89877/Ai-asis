@@ -55,13 +55,15 @@ test("missing GSTIN: reported as missing, no value is invented", () => {
   }
 });
 
-test("a single ambiguous character (O/0, I/1, B/8, S/5) is a suggestion only", () => {
-  const good = "27AAPFU0939F1ZV";
+test("an ambiguous character in the first 14 characters is not guessed; only the last character is ever suggested", () => {
   const printed = "27AAPFU0939F1ZV".replace("0939", "O939"); // letter O in a digit position: layout fails
   const r = validateGstin(printed);
   assert.equal(r.status, "format_invalid");
   assert.equal(r.gstin, printed);
-  assert.ok(suggestGstinFixes(printed).includes(good));
+  assert.deepEqual(suggestGstinFixes(printed), []);
+  const wrongLast = validateGstin("27AAPFU0939F1ZW");
+  assert.equal(wrongLast.gstin, "27AAPFU0939F1ZW");
+  assert.deepEqual(wrongLast.proposed, ["27AAPFU0939F1ZV"]);
 });
 
 // ---- Review screen: the raw/validated toggle and the audit note survive edits -------------------------------------------

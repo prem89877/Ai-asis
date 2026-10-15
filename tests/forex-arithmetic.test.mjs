@@ -141,22 +141,26 @@ test("a non-positive exchange rate is not used and is flagged", () => {
 });
 
 // ---- GSTIN repair suggestions ----------------------------------------------------------------------------------------
-test("GSTIN suggestions: look-alike character, wrong check digit, nothing to suggest", () => {
-  assert.deepEqual(suggestGstinFixes("27AAPFU0939F12V"), ["27AAPFU0939F1ZV"]); // 2 instead of Z
-  assert.ok(suggestGstinFixes("27AAPFUO939F1ZV").includes("27AAPFU0939F1ZV")); // O instead of 0
-  assert.ok(suggestGstinFixes("27AAPFU0939F1ZW").includes("27AAPFU0939F1ZV")); // only the check digit
+test("GSTIN suggestions: only the last character is ever suggested; nothing is guessed in the first 14", () => {
+  assert.deepEqual(suggestGstinFixes("27AAPFU0939F1ZW"), ["27AAPFU0939F1ZV"]); // only the last character is wrong
+  assert.deepEqual(suggestGstinFixes("27AAPFU0939F1Z1"), ["27AAPFU0939F1ZV"]);
+  assert.deepEqual(suggestGstinFixes("27AAPFU0939F12V"), []); // 2 for Z in position 14: not guessed
+  assert.deepEqual(suggestGstinFixes("27AAPFUO939F1ZV"), []); // O for 0 in the first 14: not guessed
   assert.deepEqual(suggestGstinFixes("27AAPFU0939F1ZV"), []); // already valid
   assert.deepEqual(suggestGstinFixes("12345"), []);
   assert.deepEqual(suggestGstinFixes("ZZZZZZZZZZZZZZZ"), []);
-  assert.ok(suggestGstinFixes("27aapfu0939f1zw").length >= 1); // case and spaces do not matter
+  assert.deepEqual(suggestGstinFixes("27aapfu0939f1zw"), ["27AAPFU0939F1ZV"]); // case and spaces do not matter
 });
 
 test("GSTIN flag text carries the suggestion; the suggestion is never applied to the value", () => {
-  const r = run(model({ supplier_gstin: f("27AAPFU0939F12V") }));
-  assert.equal(r.extracted.vendor_gstin, "27AAPFU0939F12V");
+  const r = run(model({ supplier_gstin: f("27AAPFU0939F1ZW") }));
+  assert.equal(r.extracted.vendor_gstin, "27AAPFU0939F1ZW");
   const fl = r.extracted.review_flags.find((x) => x.code === "invalid_gstin");
-  assert.match(fl.message, /Possible correct GSTIN: 27AAPFU0939F1ZV/);
+  assert.match(fl.message, /Possible correct GSTIN \(only the last character is different\): 27AAPFU0939F1ZV/);
   assert.deepEqual(fl.details.suggestions, ["27AAPFU0939F1ZV"]);
+  const guessed = run(model({ supplier_gstin: f("27AAPFU0939F12V") }));
+  assert.equal(guessed.extracted.vendor_gstin, "27AAPFU0939F12V");
+  assert.equal(guessed.extracted.review_flags.find((x) => x.code === "invalid_gstin").details.suggestions, undefined);
 });
 
 test("a GSTIN with a wrong check digit is never replaced, however many readings agree; agreement only softens the flag", () => {

@@ -74,3 +74,10 @@ test("a new row counts every filled box as typed; counts split errors and warnin
   assert.equal(rows[0].quantity[0].severity, "error");
   assert.deepEqual(countIssues({}, rows), { errors: 1, warnings: 1 });
 });
+
+test("GSTIN typed by hand: the hint is only the last character; a mistake elsewhere gets no guessed number", () => {
+  const wrongLast = check({ vendor_gstin: "27AAPFU0939F1ZA" }).vendor_gstin[0].message;
+  assert.match(wrongLast, /only the last character is different\): 27AAPFU0939F1ZV/);
+  const wrongMiddle = check({ vendor_gstin: "27AAPFUO939F1ZV" }).vendor_gstin[0].message;
+  assert.doesNotMatch(wrongMiddle, /Possible correct/);
+});
