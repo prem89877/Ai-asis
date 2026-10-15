@@ -54,7 +54,7 @@ test("csv: header, BOM, CRLF, quoting, number and date formats, no thousands sep
   assert.deepEqual(Array.from(bytes.subarray(0, 3)), [0xef, 0xbb, 0xbf]); // UTF-8 BOM
   const text = new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes);
   const lines = text.slice(1).split("\r\n");
-  assert.equal(lines[0], "Invoice No,Invoice Date,Supplier Name,Taxable Value,CGST,SGST/UTGST,IGST,Invoice Total");
+  assert.equal(lines[0], "Invoice No,Invoice Date,Supplier Name,Taxable Value,CGST,SGST,IGST,Invoice Total");
   assert.equal(lines[1], '0012,2026-09-15,"Acme, Traders ""Pvt""",1000.00,90.00,90.00,,1180.00');
   const dmy = new TextDecoder().decode(toCsv(t, "dmy"));
   assert.ok(dmy.includes("15/09/2026"));
@@ -138,7 +138,7 @@ test("column order is respected", () => {
 
 test("GST amounts are separate columns", () => {
   const labels = INVOICE_COLUMNS.map((c) => c.label);
-  for (const l of ["CGST", "SGST/UTGST", "IGST", "Cess", "Total Tax", "Taxable Value"]) assert.ok(labels.includes(l));
+  for (const l of ["CGST", "SGST", "UTGST", "IGST", "Cess", "Total Tax", "Taxable Value"]) assert.ok(labels.includes(l));
 });
 
 test("sorting is by date, then number (natural), then upload time; flags summarised by severity", () => {

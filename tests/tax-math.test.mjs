@@ -101,7 +101,9 @@ test("checkTaxHeads never changes the invoice", () => {
 });
 
 test("applied_tax_type labels with UTGST", () => {
-  for (const t of ["CGST+UTGST", "CGST & UTGST", "UTGST/CGST", "CGST+SGST/UTGST", "SGST/UTGST + CGST", "CGST_SGST"]) assert.equal(normalizeAppliedTaxType(t), "CGST_SGST", t);
+  // UTGST is its own head: CGST with UTGST only is a Union Territory line. A label naming SGST too stays CGST_SGST (older readings).
+  for (const t of ["CGST+UTGST", "CGST & UTGST", "UTGST/CGST", "CGST_UTGST"]) assert.equal(normalizeAppliedTaxType(t), "CGST_UTGST", t);
+  for (const t of ["CGST+SGST/UTGST", "SGST/UTGST + CGST", "CGST_SGST"]) assert.equal(normalizeAppliedTaxType(t), "CGST_SGST", t);
   assert.equal(normalizeAppliedTaxType("IGST"), "IGST");
   assert.equal(normalizeAppliedTaxType("UTGST"), null);
   assert.equal(normalizeAppliedTaxType("IGST + CGST"), null);
@@ -110,8 +112,8 @@ test("applied_tax_type labels with UTGST", () => {
 // ---- Fixed prompt: tax-head guidance ------------------------------------------------------------------------------------------
 
 test("fixed prompt: tax-head guidance is present, copy-only", () => {
-  assert.match(SYSTEM_PROMPT, /cgst, sgst and igst/);
-  assert.match(SYSTEM_PROMPT, /UTGST \(Union Territory\) goes into sgst, never into cgst/);
+  assert.match(SYSTEM_PROMPT, /cgst, sgst, utgst_amount and igst/);
+  assert.match(SYSTEM_PROMPT, /UTGST \(Union Territory GST\) is its OWN figure: put it in utgst_amount, never into sgst and never into cgst/);
   assert.match(SYSTEM_PROMPT, /TCS and TDS are not tax heads/);
   assert.match(SYSTEM_PROMPT, /cess is its own figure/);
 });
