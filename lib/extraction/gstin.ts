@@ -1,7 +1,9 @@
 // GSTIN validation.
 //  - validateGstin(): REPORTS only. It never changes a GSTIN. The raw value (upper-cased, spaces removed) is always returned
 //    as `gstin`, and a possible correction is returned separately as `proposed`, for a reviewer to see.
-//  - suggestGstinFixes(): only SUGGESTS (check digit or one look-alike character). Never written automatically.
+//  - suggestGstinFixes(): only SUGGESTS, and only the LAST character (the check character): in practice the first 14 characters are
+//    right and the 15th is the one that is misread or misprinted. Guessing look-alikes in the first 14 gave wrong suggestions. Never
+//    written automatically.
 // Why nothing is replaced: a GSTIN that fails the layout or the check digit may simply be printed that way on the invoice
 // (print error, sample invoice, old number). Replacing it with a number that happens to pass the Modulo-36 test would put a
 // GSTIN into the books that the invoice does not show. A passing layout + check digit also proves nothing about whether the
@@ -48,40 +50,20 @@ export function validateGstin(input: string | null | undefined): GstinValidation
 
 export const GSTIN_AUTO_CORRECTED_LABEL = "GSTIN Auto-Corrected (Checksum Fixed)";
 
-// Pairs that scanners and OCR often confuse. Applied in both directions.
-const LOOKALIKE_PAIRS: readonly [string, string][] = [
-  ["O", "0"], ["D", "0"], ["Q", "0"], ["I", "1"], ["L", "1"], ["Z", "2"], ["S", "5"], ["B", "8"], ["G", "6"], ["A", "4"], ["T", "7"],
-];
-
-const LOOKALIKES: Record<string, string[]> = {};
-for (const [a, b] of LOOKALIKE_PAIRS) {
-  (LOOKALIKES[a] ??= []).push(b);
-  (LOOKALIKES[b] ??= []).push(a);
-}
-
-export const MAX_GSTIN_SUGGESTIONS = 5;
-
+// The only suggestion: the check character (15th) that belongs to the first 14 characters. The first 14 are taken as they are.
+// Nothing is suggested when the first 14 characters do not have the GSTIN layout (state code, PAN, entity number, Z): a different
+// number would be a guess, and a wrong guess is worse than none.
 export function suggestGstinFixes(raw: string): string[] {
-  const g = raw.replace(/\s+/g, "").toUpperCase();
+  const g = cleanGstin(raw);
   if (g.length !== 15 || checkGstin(g).ok) return [];
-  const found = new Set<string>();
-  const accept = (candidate: string) => {
-    if (candidate !== g && checkGstin(candidate).ok) found.add(candidate);
-  };
-
-  // 1. Only the check digit (15th character) is wrong.
-  const check = gstinChecksumChar(g.slice(0, 14));
-  if (check) accept(g.slice(0, 14) + check);
-
-  // 2. One look-alike character is wrong. Position 15 is covered by 1, because its correct value follows from the first 14.
-  for (let i = 0; i < 14; i++) {
-    for (const alt of LOOKALIKES[g[i]] ?? []) accept(g.slice(0, i) + alt + g.slice(i + 1));
-  }
-  return Array.from(found).slice(0, MAX_GSTIN_SUGGESTIONS);
+  const check = computeGstinCheckDigit(g.slice(0, 14));
+  if (!check || check === g[14]) return [];
+  const fixed = g.slice(0, 14) + check;
+  return checkGstin(fixed).ok ? [fixed] : [];
 }
 
 // Text added to a GSTIN flag when a suggestion exists.
 export function suggestionText(suggestions: string[]): string {
   if (suggestions.length === 0) return "";
-  return suggestions.length === 1 ? ` Possible correct GSTIN: ${suggestions[0]}.` : ` Possible correct GSTINs: ${suggestions.join(", ")}.`;
+  return suggestions.length === 1 ? ` Possible correct GSTIN (only the last character is different): ${suggestions[0]}.` : ` Possible correct GSTINs: ${suggestions.join(", ")}.`;
 }
