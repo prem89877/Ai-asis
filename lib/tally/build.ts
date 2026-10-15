@@ -22,6 +22,7 @@ export interface TallyConfig {
   igstLedger: string;
   cessLedger: string;
   roundOffLedger: string;
+  discountLedger: string; // credit side of a commercial discount printed AFTER the taxes (total = taxable + taxes - discount)
   companyName: string; // optional; empty = Tally uses the company that is currently open
 }
 
@@ -34,6 +35,7 @@ export const DEFAULT_TALLY_CONFIG: TallyConfig = {
   igstLedger: "Input IGST",
   cessLedger: "Input Cess",
   roundOffLedger: "Round Off",
+  discountLedger: "Discount Received",
   companyName: "",
 };
 
@@ -105,11 +107,20 @@ export function buildVouchers(invoices: ExportInvoice[], config: TallyConfig): {
     if (parts.some((p) => p.paise < 0)) { skip("Negative amounts (credit notes) are not supported."); continue; }
 
     const sum = parts.reduce((s, p) => s + p.paise, 0);
-    const diff = total - sum; // > 0: total is more than the parts, so a round-off DEBIT is needed
+    let diff = total - sum; // > 0: total is more than the parts, so a round-off DEBIT is needed
+    // A commercial discount printed after the taxes: the printed total is taxable + taxes - discount. The gap is exactly the discount,
+    // so it is booked to its own ledger instead of the invoice being skipped (a discount is not TDS and not round-off).
+    const discount = inv.discount_amount === null || inv.discount_amount === undefined ? 0 : Math.abs(toPaise(inv.discount_amount));
+    let discountEntry = 0;
+    if (diff < -ROUND_OFF_LIMIT_PAISE && discount > 0 && Math.abs(-diff - discount) <= ROUND_OFF_LIMIT_PAISE) {
+      discountEntry = discount;
+      diff += discount;
+    }
     if (Math.abs(diff) > ROUND_OFF_LIMIT_PAISE) { skip(`Taxable value plus taxes is ${money(sum)} but the invoice total is ${money(total)} (difference ${money(Math.abs(diff))}). Correct the figures in Review, verify again, then export.`); continue; }
 
     const entries: TallyEntry[] = [{ ledger: inv.vendor_name.trim(), side: "Cr", paise: total, isParty: true }];
     for (const p of parts) entries.push({ ledger: p.ledger, side: "Dr", paise: p.paise, isParty: false });
+    if (discountEntry > 0) entries.push({ ledger: config.discountLedger, side: "Cr", paise: discountEntry, isParty: false });
     if (diff > 0) entries.push({ ledger: config.roundOffLedger, side: "Dr", paise: diff, isParty: false });
     if (diff < 0) entries.push({ ledger: config.roundOffLedger, side: "Cr", paise: -diff, isParty: false });
 
