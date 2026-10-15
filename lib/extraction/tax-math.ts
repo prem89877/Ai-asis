@@ -14,7 +14,7 @@
 // sgst_amount have utgst_amount = null and still work (the sum is the same).
 import { isForeign, hasRate } from "./arithmetic.ts";
 import { toPaise } from "./normalize.ts";
-import { hasStateTax, stateTaxLabel } from "./tax-components.ts";
+import { hasStateTax, removeCessFromLineTaxes, stateTaxLabel } from "./tax-components.ts";
 import type { ReviewFlag, StoredExtracted, StoredItem } from "./types.ts";
 
 // GST state codes of Union Territories WITHOUT a legislature: Chandigarh 04, Dadra & Nagar Haveli and Daman & Diu 26,
@@ -101,6 +101,8 @@ export function checkTaxHeads(e: StoredExtracted, items: StoredItem[], tolerance
   const foreign = isForeign(e.currency, e.exchange_rate) && hasRate(e.exchange_rate);
   if (!foreign) {
     const bad: { position: number; expected: number; extracted: number }[] = [];
+    // Line tax that already contains the cess (GST + cess): compare the GST part with taxable x rate (see tax-components.ts).
+    const noCess = removeCessFromLineTaxes(e, items, items.map((it) => (has(it.gst_amount) ? toPaise(it.gst_amount) : null)), tol);
     items.forEach((it, i) => {
       if (it.applied_tax_type === "NONE" || !has(it.gst_amount) || !has(it.gst_rate) || !has(it.taxable_amount)) return;
       const expected = toPaise((it.taxable_amount * it.gst_rate) / 100);
@@ -108,6 +110,8 @@ export function checkTaxHeads(e: StoredExtracted, items: StoredItem[], tolerance
       const allowed = Math.max(tolerancePaise, Math.round(Math.abs(expected) * 0.005));
       if (Math.abs(got - expected) <= allowed) return;
       if (Math.abs(got - expected / 2) <= allowed) return; // one head only
+      const gstPart = noCess ? noCess.taxes[i] : null;
+      if (gstPart !== null && Math.abs(gstPart - expected) <= allowed) return; // rate is the GST rate, the printed tax also holds the cess
       bad.push({ position: i + 1, expected: expected / 100, extracted: got / 100 });
     });
     if (bad.length > 0) {

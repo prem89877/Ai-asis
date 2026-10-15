@@ -12,7 +12,7 @@
 // Every finding names the field, the expected value, the observed value and the reason, so a reviewer knows what to look at.
 // Nothing here changes a value and nothing is hard coded: the figures come from the invoice being checked.
 import { isForeign, hasRate } from "./arithmetic.ts";
-import { anyGstHeadKnown, hasStateTax, known, paise, splitLineTaxes, taxHeadsPaise, type LineTaxSplit } from "./tax-components.ts";
+import { anyGstHeadKnown, hasStateTax, known, paise, removeCessFromLineTaxes, splitLineTaxes, taxHeadsPaise, type LineTaxSplit } from "./tax-components.ts";
 import type { ReviewFlag, StoredExtracted, StoredItem } from "./types.ts";
 
 export type ComponentField = "igst" | "cgst" | "sgst" | "utgst_amount" | "cess" | "total_gst";
@@ -34,6 +34,7 @@ export interface ComponentReconciliation {
   totalGst: ComponentFinding | null; // only set when no single head explains it
   lineSplit: { igst: number; cgst: number; sgst: number; utgst: number } | null; // INR
   totals: { fromComponents: number; fromLines: number | null }; // INR, total GST both ways
+  lineTaxIncludesCess: number | null; // INR of cess found inside the printed line taxes (and taken out), else null
 }
 
 const has = (v: number | null | undefined): v is number => v !== null && v !== undefined;
@@ -62,12 +63,16 @@ export function reconcileTaxComponents(e: StoredExtracted, items: StoredItem[], 
   // Freight / packaging printed as pre-tax charges (not as item rows) carry tax in the invoice heads that the item lines do not show,
   // so the heads cannot be rebuilt from the lines alone when the lines are not labelled.
   const hasExtraCharges = nz(e.pre_tax_charges);
-  const taxes = items.map(lineTax);
+  let taxes = items.map(lineTax);
   const linesKnown = items.length > 0 && taxes.every((t) => t !== null);
+  // Line taxes that already contain the cess (GST + cess) are not CGST + SGST. Same rule as validateTaxAllocation (tax-components.ts).
+  const noCess = linesKnown ? removeCessFromLineTaxes(e, items, taxes, tol) : null;
+  if (noCess) taxes = noCess.taxes;
   const sumTaxes = linesKnown ? items.reduce((a, it, i) => a + (it.applied_tax_type === "NONE" ? 0 : (taxes[i] as number)), 0) : null;
   const out: ComponentReconciliation = {
     basis: "none", heads: [], cess: null, totalGst: null, lineSplit: null,
     totals: { fromComponents: r2(fromComponents), fromLines: sumTaxes === null ? null : r2(sumTaxes) },
+    lineTaxIncludesCess: noCess ? r2(noCess.cess) : null,
   };
   if (!linesKnown) return out;
   const off = (a: number, b: number) => Math.abs(a - b) > tol;

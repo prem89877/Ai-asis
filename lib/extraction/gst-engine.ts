@@ -11,7 +11,7 @@
 import { checkLineItems, hasRate, isForeign, rateToleranceFor } from "./arithmetic.ts";
 import { describeIdentifierProblem, isValidAckNo, isValidEwayBill, isValidIrn } from "./identifiers.ts";
 import { toPaise } from "./normalize.ts";
-import { hasStateTax, known as knownAmt, reconcileHeads, splitLineTaxes, stateTaxPaise, taxHeadsPaise, totalTaxPaise } from "./tax-components.ts";
+import { hasStateTax, isCessInclusiveLineTotal, known as knownAmt, reconcileHeads, removeCessFromLineTaxes, splitLineTaxes, stateTaxPaise, taxHeadsPaise, totalTaxPaise } from "./tax-components.ts";
 import { checkTaxHeads, diagnoseTotalMismatch, type TaxRegime } from "./tax-math.ts";
 import { componentFlag, reconcileTaxComponents } from "./tax-reconcile.ts";
 import type { ReviewFlag, StoredExtracted, StoredItem } from "./types.ts";
@@ -64,7 +64,10 @@ export function validateTaxAllocation(e: StoredExtracted, items: StoredItem[], t
   const mixed = nonZero(e.igst_amount) && (nonZero(e.cgst_amount) || hasStateTax(e));
   const tol = tolerancePaise + Math.min(items.length, 200); // each line's tax is rounded to the paisa
   const out = (method: TaxAllocation["method"], extra: Partial<TaxAllocation> = {}): TaxAllocation => ({ method, mixed, lineIgst: 0, lineCgst: 0, lineSgst: 0, lineUtgst: 0, flags, ...extra });
-  const taxes = items.map(lineTaxPaise);
+  let taxes = items.map(lineTaxPaise);
+  // A line tax that already contains the cess (GST + cess) is not CGST + SGST: take the cess out (only on exact evidence, see tax-components.ts).
+  const noCess = removeCessFromLineTaxes(e, items, taxes, tol);
+  if (noCess) taxes = noCess.taxes;
   const known = items.length > 0 && taxes.every((t) => t !== null);
   const labelled = items.length > 0 && items.every((it) => it.applied_tax_type === "IGST" || it.applied_tax_type === "CGST_SGST" || it.applied_tax_type === "CGST_UTGST" || it.applied_tax_type === "NONE");
 
@@ -524,7 +527,13 @@ export function tripleCheckTax(e: StoredExtracted, items: StoredItem[], toleranc
     methods.push({ id: "rate_x_taxable", label: "Taxable value x GST rate, line by line", value: items.reduce((a, it) => a + toPaise(((it.taxable_amount as number) * (it.gst_rate as number)) / 100), 0) / 100 });
   }
   const disagreeing: string[] = [];
-  for (const m of methods.slice(1)) if (Math.abs(toPaise(m.value) - header) > tol) disagreeing.push(m.id);
+  const cessP = p(e.cess_amount);
+  for (const m of methods.slice(1)) {
+    let v = toPaise(m.value);
+    // A line-derived total that equals GST + cess is the cess-inclusive pattern (see tax-components.ts): compare it without the cess.
+    if (isCessInclusiveLineTotal(e, items, v, tol)) { v -= cessP; m.value = v / 100; m.label += ` (cess INR ${(cessP / 100).toFixed(2)} excluded)`; }
+    if (Math.abs(v - header) > tol) disagreeing.push(m.id);
+  }
 
   // Fourth, rule-based method: supplier state vs place of supply decides which tax head is expected.
   const sup = stateOf(e.vendor_gstin, "gstin"), pos = stateOf(e.place_of_supply, "place");
@@ -600,6 +609,13 @@ export function validateInvoice(data: InvoiceData, opts: EngineOptions): Invoice
   // breakdown. When the lines are labelled, alloc.flags already carries the head findings (with field / expected / observed / reason).
   const rec = reconcileTaxComponents(e, items, opts.tolerancePaise);
   const componentFlags: ReviewFlag[] = [];
+  if (rec.lineTaxIncludesCess !== null) {
+    componentFlags.push({
+      code: "line_tax_includes_cess", severity: "info", field: "cess",
+      message: `The tax printed on the item lines (GST + cess) includes the cess of INR ${rec.lineTaxIncludesCess.toFixed(2)}. The cess was taken out before the lines were compared with CGST / SGST / UTGST / IGST. No stored amount was changed.`,
+      details: { cess: rec.lineTaxIncludesCess },
+    });
+  }
   if (rec.basis !== "labelled_lines" && rec.heads.length > 0) componentFlags.push(componentFlag("tax_component_mismatch", rec.heads));
   if (rec.cess) componentFlags.push(componentFlag("tax_component_mismatch", [rec.cess]));
   if (rec.totalGst) componentFlags.push(componentFlag("tax_component_mismatch", [rec.totalGst]));

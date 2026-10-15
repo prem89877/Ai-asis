@@ -91,6 +91,55 @@ export function splitLineTaxes(items: { applied_tax_type?: LineTaxType | "AMOUNT
   return out;
 }
 
+// ---- Line tax that already contains the cess ----------------------------------------------------------------------------
+// Some invoices print a per-line "tax" figure (or a combined rate) that is GST + cess, e.g. CGST 12.875 % + SGST 12.875 % + cess 11.175 %.
+// Cess is not GST: if such a line tax is read as CGST + SGST, every GST head comes out too high by half the cess.
+// This is recognised ONLY when the evidence is exact, and nothing is changed in the stored data:
+//   * a cess is printed at invoice level (above the rounding window),
+//   * the line taxes add up to invoice GST + invoice cess (within the window) and NOT to the invoice GST alone,
+//   * one tax family only (all CGST+SGST, all CGST+UTGST or all IGST): the cess then cannot move between heads, so the heads
+//     rebuilt from the lines are exact. With mixed families the split of the cess is unknown and the mismatch stays visible.
+// Anything else keeps the old behaviour, so a genuine tax error is still reported.
+type LineLike = { applied_tax_type?: string | null };
+type HeadsLike = TaxHeadsInput;
+
+export function isCessInclusiveLineTotal(e: HeadsLike, items: LineLike[], lineTaxTotal: number, tolPaise: number): boolean {
+  const H = taxHeadsPaise(e);
+  const gst = totalGstPaise(H);
+  if (H.cess <= tolPaise || gst <= 0) return false;
+  if (Math.abs(lineTaxTotal - (gst + H.cess)) > tolPaise || Math.abs(lineTaxTotal - gst) <= tolPaise) return false;
+  const families = new Set<string>();
+  let unlabelled = false;
+  for (const it of items) {
+    const t = it.applied_tax_type;
+    if (t === "NONE") continue;
+    if (t === "IGST" || t === "CGST_SGST" || t === "CGST_UTGST") families.add(t); else unlabelled = true;
+  }
+  const mixedInvoice = H.igst !== 0 && (H.cgst !== 0 || stateTaxPaise(H) !== 0);
+  if (families.size > 1) return false;
+  if (unlabelled && mixedInvoice) return false;
+  return true;
+}
+
+// Line taxes (paise) without the cess, or null when the lines do not show that pattern. Order and NONE lines are kept; the cess is
+// taken out in proportion to each taxed line and the rounding residue goes to the last taxed line, so the lines still add up exactly.
+export function removeCessFromLineTaxes(e: HeadsLike, items: LineLike[], taxes: (number | null)[], tolPaise: number): { taxes: (number | null)[]; cess: number } | null {
+  if (items.length === 0 || taxes.some((t) => t === null || t === undefined)) return null;
+  const idx = items.map((_, i) => i).filter((i) => items[i].applied_tax_type !== "NONE" && (taxes[i] as number) !== 0);
+  const total = idx.reduce((a, i) => a + (taxes[i] as number), 0);
+  if (!isCessInclusiveLineTotal(e, items, total, tolPaise)) return null;
+  const cess = taxHeadsPaise(e).cess;
+  const target = total - cess;
+  const out = [...taxes];
+  let used = 0;
+  idx.forEach((i, n) => {
+    const v = n === idx.length - 1 ? target - used : Math.round(((taxes[i] as number) * target) / total);
+    out[i] = v;
+    used += v;
+  });
+  return { taxes: out, cess };
+}
+
 // ---- Reconciliation ----------------------------------------------------------------------------------------------------
 export interface HeadDiscrepancy {
   head: "CGST" | "SGST" | "UTGST" | "IGST" | "CESS" | "TOTAL_GST";
