@@ -73,3 +73,38 @@ Runs inside `validateInvoice()` next to the main checks. It never changes an ext
   amount, and the printed grand total is never edited to make a reconciliation pass.
 - Discrepancies are specific: `tax_allocation_mismatch` lists the mismatched heads with invoice / lines / difference per head;
   `arithmetic_total_mismatch` lists likely causes (for example `utgst_not_read`).
+
+## Component-specific tax validation (lib/extraction/tax-reconcile.ts)
+
+Every GST head is rebuilt from the item lines on its own and compared with the invoice-level figure. A matching grand total can no longer hide a wrong breakdown.
+
+| Head | Compared with |
+| --- | --- |
+| IGST | lines charged IGST |
+| CGST | half of every CGST+SGST line **and** every CGST+UTGST line (the aggregate of both) |
+| SGST | half of the CGST+SGST lines only |
+| UTGST | half of the CGST+UTGST lines only |
+| Cess | the cess the item totals imply (only when the lines carry a total that includes it) |
+| Total GST | CGST + SGST + UTGST + IGST (each head once) against the tax of all lines |
+| Grand total | the full invoice arithmetic (`validateInvoiceTotals`) |
+
+CGST is never compared with SGST alone: with SGST lines and UTGST lines, CGST = SGST + UTGST.
+
+Where the lines carry no tax label, a non-mixed invoice is still split by supply type (IGST only, or CGST + state tax). Mixed unlabelled invoices keep the existing split inference. Invoices with pre-tax charges that are not item rows skip the unlabelled fallback, because those charges carry tax the lines do not show.
+
+Every finding states the field, the expected value, the observed value and the reason (`details.components[]`):
+
+* `tax_allocation_mismatch` (labelled lines) and `tax_component_mismatch` (everything else) list each failed head.
+* Diagnoses: `utgst_missing`, `utgst_merged_into_sgst`, `utgst_without_utgst_lines`, `igst_mismatch`, `cgst_mismatch`, `sgst_mismatch`, `state_tax_mismatch`, `cess_mismatch`, `total_gst_mismatch`.
+* `arithmetic_total_mismatch` now also carries `details.field`, `observed`, `difference`, `reason` and the `components` used.
+* When a head disagrees with the lines, `summary.verification.level` is `unverified` even if the grand total matches.
+
+`validation_summary.tax_components` and `validation_summary.adjustments` (TCS, TDS, discount, discount treatment, round-off, printed net payable) record what was compared.
+
+## TCS, TDS and discounts
+
+* TCS is added after tax and is inside the grand total. TDS is withheld from the payment and is not inside the grand total. A commercial discount only reduces the invoice value. They are kept in separate fields and never converted into each other.
+* An invoice that states TCS / TDS is not applied gets no adjustment (`adjustments.tcs_tds_applied = false`).
+* A printed net payable that is lower than the grand total by exactly the printed commercial discount is explained by the discount. It is no longer reported as a missing TDS (`net_payable_tds_not_found`).
+* A TCS or TDS figure identical to the printed discount raises `tcs_matches_discount` / `tds_matches_discount`; both values stay as read.
+* Tally: a gap between taxable + taxes and the printed total that equals the printed discount is booked to the `discountLedger` ("Discount Received", credit) instead of skipping the invoice. TCS is still not booked (the export view does not carry `tcs_amount`), so such an invoice is skipped with the usual "does not add up" reason.
