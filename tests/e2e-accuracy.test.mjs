@@ -1,4 +1,4 @@
-// End-to-end verification of Parts 1-3 working together (dynamic prompt -> structured extraction -> suspicious-field detection ->
+// End-to-end verification of Parts 1-3 working together (fixed prompt -> structured extraction -> suspicious-field detection ->
 // source-grounded re-read -> evidence-backed correction -> saved record -> review form / table mapping -> export and Tally).
 // The provider is a SCRIPTED stub (tests/helpers/pipeline-harness.mjs): these tests prove what the pipeline's CODE does with given
 // readings. They do not prove how the real Gemini model behaves. Nothing here touches the network.
@@ -88,15 +88,15 @@ test("e2e: a wrong total repeated by every reading is re-read from the source, c
   assert.equal(voucherBalance(vouchers[0]), 0);
 });
 
-test("e2e: the source re-read is blind (saved value never sent), uses the original bytes at high resolution, and the dynamic prompt keeps the fixed prompt intact", async () => {
+test("e2e: the source re-read is blind (saved value never sent), uses the original bytes at high resolution", async () => {
   const r = await runScenario("total-wrong-all-layers");
   const call = r.callsBy("source")[0].input;
   assert.equal(call.highResolution, true);
   assert.ok(!call.userPrompt.includes(String(sc("total-wrong-all-layers").reading.grand_total.value)));
   assert.deepEqual(Array.from(call.data), Array.from(r.bytes));
-  const first = r.callsBy("first")[0].input.systemPrompt;
-  assert.ok(first.startsWith(SYSTEM_PROMPT.replace(/\s*Return JSON only\.\s*$/, "")));
-  assert.ok(first.endsWith("Return JSON only."));
+  const first = r.callsBy("first")[0].input;
+  assert.equal(first.systemPrompt, undefined); // the fixed SYSTEM_PROMPT is used as it is
+  assert.equal(first.highResolution, true); // zoom: every reading asks for high media resolution
 });
 
 // ---- 2. Test cases ----------------------------------------------------------------------------------------------------------------------
@@ -146,7 +146,6 @@ test("blurry or poorly scanned: a re-read that is unreadable, low-confidence or 
   const photo = await runScenario("photo-png-wrong-total");
   assert.equal(photo.callsBy("source")[0].input.mime, "image/png");
   assert.equal(photo.extracted.total_amount, sc("photo-png-wrong-total").truth.grand_total.value);
-  assert.match(photo.callsBy("first")[0].input.systemPrompt, /image \(scan or phone photo\)/);
 });
 
 test("similar-looking digits and decimal errors that every reading repeated are corrected from the source, one field each", async () => {
@@ -240,10 +239,9 @@ test("incorrect taxable value and grand total: corrected from the source; a tota
   assert.equal(v.result.outcome, "completed");
 });
 
-test("multi-line and multi-page: a 3-page prompt, 12 rows kept in order, only the misread row is corrected", async () => {
+test("multi-line and multi-page: 12 rows over 3 pages kept in order, only the misread row is corrected", async () => {
   const clear = await runScenario("multipage-clear");
   assert.equal(clear.items.length, 12);
-  assert.match(clear.callsBy("first")[0].input.systemPrompt, /This PDF has 3 pages\. Read every page/);
   assert.equal(clear.result.outcome, "completed");
   const r = await runScenario("multipage-row-quantity");
   const truth = sc("multipage-row-quantity").truth;
@@ -307,13 +305,11 @@ test("failures: malformed JSON on every attempt fails cleanly, saves nothing but
   assert.equal(r.callsBy("source").length + r.callsBy("verify").length, 0);
 });
 
-test("failures: a schema-invalid answer, then a good one, is retried (the retry prompt carries a schema reminder) and saved", async () => {
+test("failures: a schema-invalid answer, then a good one, is retried and saved", async () => {
   const r = await run({ reading: sc("clear-intra-state").reading, answers: { first: [ok({ document_type: "tax_invoice" }), sc("clear-intra-state").reading] } });
   assert.equal(r.result.outcome, "completed");
   assert.equal(r.result.attempts, 2);
-  const [a, b] = r.callsBy("first");
-  assert.notEqual(a.input.systemPrompt, b.input.systemPrompt);
-  assert.ok(b.input.systemPrompt.length > a.input.systemPrompt.length);
+  assert.equal(r.callsBy("first").length, 2);
 });
 
 test("failures: 429 then success is retried with back-off; a permanent provider rejection is not retried; timeouts everywhere fail", async () => {
@@ -347,7 +343,7 @@ test("failures: malformed or failing source re-read leaves every value exactly a
   for (const id of ["source-reply-malformed", "source-provider-error"]) {
     const s = sc(id);
     const withLayer = await runScenario(id);
-    const baseline = await run({ reading: s.reading, config: { sourceVerify: false, dynamicPrompt: false } });
+    const baseline = await run({ reading: s.reading, config: { sourceVerify: false } });
     assert.equal(withLayer.extracted.total_amount, baseline.extracted.total_amount, id);
     assert.deepEqual(withLayer.items.map((i) => [i.quantity, i.unit_price, i.taxable_amount]), baseline.items.map((i) => [i.quantity, i.unit_price, i.taxable_amount]), id);
     assert.ok(withLayer.extracted.review_flags.some((x) => x.code === "source_verify_unavailable" && x.severity === "info"), id);
@@ -355,30 +351,17 @@ test("failures: malformed or failing source re-read leaves every value exactly a
   }
 });
 
-test("failures: a throwing dynamic-prompt engine falls back to the unchanged fixed prompt and the run still completes", async () => {
-  const s = sc("clear-intra-state");
-  const h = await import("./helpers/pipeline-harness.mjs");
-  const x = h.setup({ reading: s.reading });
-  x.deps.promptBuilder = () => { throw new Error("engine bug"); };
-  const { runExtraction } = await import("../lib/extraction/pipeline.ts");
-  const result = await runExtraction(x.deps, x.ctx);
-  assert.equal(result.outcome, "completed");
-  const first = x.state.calls.find((c) => c.role === "first").input;
-  assert.equal(first.systemPrompt, undefined); // no override: callGemini uses the fixed SYSTEM_PROMPT
-  assert.ok(x.state.logs.some((l) => l.event === "extraction_dynamic_prompt_error"));
-});
-
 // ---- 4. Regression and production safety ------------------------------------------------------------------------------------------------
 
 test("defaults: every layer is on by default, each has its own off switch, and source verification still needs the second reading", () => {
   const c = getGeminiConfig({ GEMINI_API_KEY: "k" });
-  for (const k of ["verify", "audit", "totalCheck", "partiesCheck", "dynamicPrompt", "sourceVerify"]) assert.equal(c[k], true, k);
+  for (const k of ["verify", "audit", "totalCheck", "partiesCheck", "highResolution", "sourceVerify"]) assert.equal(c[k], true, k);
   assert.equal(c.partiesRetries, 1);
   assert.equal(c.model, "gemini-3.5-flash-lite");
   assert.equal(c.deadlineMs, 52_000);
   assert.equal(c.maxAttempts, 3);
-  const off = getGeminiConfig({ GEMINI_API_KEY: "k", EXTRACTION_DYNAMIC_PROMPT: "off", EXTRACTION_SOURCE_VERIFY: "false", EXTRACTION_VERIFY: "0" });
-  assert.deepEqual([off.dynamicPrompt, off.sourceVerify, off.verify], [false, false, false]);
+  const off = getGeminiConfig({ GEMINI_API_KEY: "k", EXTRACTION_HIGH_RES: "off", EXTRACTION_SOURCE_VERIFY: "false", EXTRACTION_VERIFY: "0" });
+  assert.deepEqual([off.highResolution, off.sourceVerify, off.verify], [false, false, false]);
   assert.equal(getGeminiConfig({}), null); // no key: the routes answer 503 before touching a job
   const chk = getCheckConfig({});
   assert.deepEqual([chk.lowConfidence, chk.tolerancePaise, chk.lineFix, chk.lineFixMaxConfidence, chk.dedupeRows, chk.forex], [0.8, 100, true, 0.95, true, true]);
@@ -395,8 +378,8 @@ test("defaults: features that must be off by default are off, and the source lay
     assert.equal(r.callsBy("source").length, 0);
     assert.equal(r.extracted.validation_summary.source_verification, undefined);
   }
-  const off = await runScenario("total-wrong-all-layers", { config: { dynamicPrompt: false } });
-  assert.equal(off.callsBy("first")[0].input.systemPrompt, undefined); // fixed prompt only
+  const off = await runScenario("total-wrong-all-layers", { config: { highResolution: false } });
+  assert.equal(off.callsBy("first")[0].input.highResolution, undefined); // zoom switched off: normal resolution
 });
 
 test("env: every variable read by lib/extraction/config.ts is documented in .env.example, and no new NEXT_PUBLIC_ variable exists", () => {
@@ -407,7 +390,7 @@ test("env: every variable read by lib/extraction/config.ts is documented in .env
   const missingDocs = [...names].filter((n) => !new RegExp(`^#?\\s*${n}=`, "m").test(example));
   assert.deepEqual(missingDocs, []);
   assert.match(example, /^EXTRACTION_SOURCE_VERIFY=on/m);
-  assert.match(example, /^EXTRACTION_DYNAMIC_PROMPT=on/m);
+  assert.match(example, /^EXTRACTION_HIGH_RES=on/m);
 });
 
 function walk(dir, out = []) {
@@ -427,9 +410,9 @@ test("secrets: no client-side file reads server secrets or imports the extractio
     const src = readFileSync(p, "utf8");
     const rel = path.relative(ROOT, p);
     assert.doesNotMatch(src, /GEMINI_API_KEY|SUPABASE_SERVICE_ROLE_KEY|INTEGRATION_ENCRYPTION_KEY|GST_PORTAL_API_KEY|process\.env\.(?!NEXT_PUBLIC_|NODE_ENV\b)/, `${rel} reads a server secret`);
-    assert.doesNotMatch(src, /lib\/extraction\/(gemini|pipeline|source-verify|dynamic-prompt|config|store)/, `${rel} imports server-only extraction code`);
+    assert.doesNotMatch(src, /lib\/extraction\/(gemini|pipeline|source-verify|config|store)/, `${rel} imports server-only extraction code`);
   }
-  for (const m of ["source-verify.ts", "dynamic-prompt.ts", "pipeline.ts"]) assert.doesNotMatch(readFileSync(path.join(ROOT, "lib/extraction", m), "utf8"), /process\.env/, `${m} reads process.env directly`);
+  for (const m of ["source-verify.ts", "pipeline.ts"]) assert.doesNotMatch(readFileSync(path.join(ROOT, "lib/extraction", m), "utf8"), /process\.env/, `${m} reads process.env directly`);
   // the only place the key travels is the request header of the provider client
   const gem = readFileSync(path.join(ROOT, "lib/extraction/gemini.ts"), "utf8");
   assert.match(gem, /x-goog-api-key/);

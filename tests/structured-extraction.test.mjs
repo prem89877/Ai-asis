@@ -50,7 +50,7 @@ function setup({ responses, bytes = minimalPdf(1), mime = "application/pdf", con
   const saved = { completes: [] };
   let i = 0, t = Date.parse("2026-10-14T00:00:00Z");
   const deps = {
-    geminiConfig: { apiKey: "k", model: "m", inputPricePerMTok: 0.3, outputPricePerMTok: 2.5, timeoutMs: 10_000, deadlineMs: 50_000, maxAttempts: 3, maxOutputTokens: 1000, dynamicPrompt: true, ...config },
+    geminiConfig: { apiKey: "k", model: "m", inputPricePerMTok: 0.3, outputPricePerMTok: 2.5, timeoutMs: 10_000, deadlineMs: 50_000, maxAttempts: 3, maxOutputTokens: 1000, ...config },
     checkConfig: check, maxPdfPages: 10, now: () => t, sleep: async (ms) => { t += ms; }, random: () => 0, log: () => {},
     files: { download: async () => bytes },
     gemini: async () => { const r = responses[Math.min(i, responses.length - 1)]; i += 1; t += 500; return r; },
