@@ -14,8 +14,8 @@ import { createSupabaseFiles, createSupabaseFxCache, createSupabaseStore } from 
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-// One invoice per request. Keep this above EXTRACTION_DEADLINE_MS (default 52 s).
-export const maxDuration = 60;
+// One invoice per request. Keep this above EXTRACTION_DEADLINE_MS (default 150 s) and below EXTRACTION_STALE_SECONDS (default 240 s).
+export const maxDuration = 200;
 
 interface ClaimResult {
   result: "claimed" | "not_found" | "no_job" | "already_processing" | "not_queued" | "busy";
