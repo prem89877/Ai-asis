@@ -19,8 +19,6 @@ import { nameKey, normalizeExtraction } from "./normalize.ts";
 import { dedupeItemRows } from "./item-rows.ts";
 import { parseModelJson } from "./parse-json.ts";
 import { preflight } from "./preflight.ts";
-import { buildDynamicPrompt, composeSystemPrompt, composeUserPrompt } from "./dynamic-prompt.ts";
-import type { DocumentSignals, DynamicPrompt, DynamicPromptOptions, PromptPurpose } from "./dynamic-prompt.ts";
 import { AUDIT_SYSTEM_PROMPT, AUDIT_USER_PROMPT, buildVerifyUserPrompt, KEYFIGURES_SYSTEM_PROMPT, KEYFIGURES_USER_PROMPT, PARTIES_SYSTEM_PROMPT, PARTIES_USER_PROMPT, SYSTEM_PROMPT, VERIFY_SYSTEM_PROMPT } from "./prompt.ts";
 import { buildKeyFiguresSchema, buildPartiesSchema, validateKeyFigures, validateModelOutput, validateParties } from "./schema.ts";
 import { auditExtraction, needsAnotherPartiesReading } from "./final-audit.ts";
@@ -94,7 +92,6 @@ export interface PipelineDeps {
   gstPortal?: GstLookup | null; // live GST portal lookup of the supplier GSTIN (gst-portal.ts); null / absent = not configured
   fx?: FxLookup | null; // historical exchange rate of the invoice date for foreign currency invoices (fx-rates.ts); null / absent = off
   maxPdfPages: number;
-  promptBuilder?: (signals: DocumentSignals, options?: DynamicPromptOptions) => DynamicPrompt; // dynamic-prompt.ts; replaceable in tests. Used only when geminiConfig.dynamicPrompt is on.
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
@@ -182,6 +179,19 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
   const log = deps.log ?? ((event, data) => console.error(event, data));
   const started = now();
 
+  // Zoom: every reading is asked for at high media resolution (small print and look-alike characters are easier to tell apart).
+  // If the provider rejects that setting, the same reading is repeated once without it. A caller that sets highResolution
+  // itself (the targeted source check) is left alone.
+  const gemini: GeminiCaller = async (input) => {
+    if (input.highResolution !== undefined || cfg.highResolution === false) return deps.gemini(input);
+    const res = await deps.gemini({ ...input, highResolution: true });
+    if (!res.ok && res.code === "provider_rejected_input") {
+      await recordUsage(res, "high_resolution_rejected");
+      return deps.gemini({ ...input, highResolution: false });
+    }
+    return res;
+  };
+
   let attempts = 0;
   let costUsd = 0;
 
@@ -231,26 +241,7 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
       if (remaining < MIN_TIME_FOR_CALL_MS) break;
       attempts += 1;
 
-      // First reading only. The fixed system prompt stays; a short invoice-specific section is added to it. If the engine fails
-      // for any reason the run continues with the unchanged static prompts (the model never sees a half-built prompt).
-      let promptOverride: { systemPrompt: string; userPrompt: string } | null = null;
-      if (cfg.dynamicPrompt) {
-        try {
-          const dyn = (deps.promptBuilder ?? buildDynamicPrompt)({
-            mime: ctx.mime,
-            pages: pre.pages,
-            width: pre.width,
-            height: pre.height,
-            attempt: attempts,
-            previousFailure: attempts > 1 ? lastCode : null,
-          });
-          promptOverride = { systemPrompt: composeSystemPrompt(SYSTEM_PROMPT, dyn), userPrompt: dyn.userPrompt };
-        } catch {
-          log("extraction_dynamic_prompt_error", { jobId: ctx.jobId });
-        }
-      }
-
-      const res = await deps.gemini({
+      const res = await gemini({
         apiKey: cfg.apiKey,
         model: cfg.model,
         mime: ctx.mime,
@@ -258,7 +249,6 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
         timeoutMs: Math.max(1_000, Math.min(cfg.timeoutMs, remaining - 1_000)),
         maxOutputTokens: cfg.maxOutputTokens,
         fetchImpl: deps.fetchImpl,
-        ...(promptOverride ?? {}),
       });
 
       let retryAfterMs: number | undefined;
@@ -318,30 +308,18 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
         recheckNotes.push({ code: "recheck_unavailable", severity: "info", message: "The second check was skipped because time ran out. Only one reading of the document was used." });
       } else {
         const timeoutMs = Math.max(1_000, Math.min(cfg.timeoutMs, remaining - VERIFY_SAVE_MARGIN_MS));
-        // The same dynamic prompt engine serves every reading (purpose = which one). Blind readings get text built from the file's
-        // properties only. On any engine failure the reading keeps its unchanged fixed prompts.
-        const layerPrompt = (purpose: PromptPurpose, baseSystem: string, baseUser: string): { systemPrompt: string; userPrompt: string } => {
-          if (!cfg.dynamicPrompt) return { systemPrompt: baseSystem, userPrompt: baseUser };
-          try {
-            const dyn = (deps.promptBuilder ?? buildDynamicPrompt)({ mime: ctx.mime, pages: pre.pages, width: pre.width, height: pre.height }, { purpose });
-            return { systemPrompt: composeSystemPrompt(baseSystem, dyn), userPrompt: composeUserPrompt(baseUser, dyn) };
-          } catch {
-            log("extraction_dynamic_prompt_error", { jobId: ctx.jobId, purpose });
-            return { systemPrompt: baseSystem, userPrompt: baseUser };
-          }
-        };
         const call = async (extra: { systemPrompt: string; userPrompt: string; responseSchema?: unknown }): Promise<GeminiCallResult | null> => {
           try {
-            return await deps.gemini({ apiKey: cfg.apiKey, model: cfg.model, mime: ctx.mime, data: bytes, timeoutMs, maxOutputTokens: cfg.maxOutputTokens, fetchImpl: deps.fetchImpl, ...extra });
+            return await gemini({ apiKey: cfg.apiKey, model: cfg.model, mime: ctx.mime, data: bytes, timeoutMs, maxOutputTokens: cfg.maxOutputTokens, fetchImpl: deps.fetchImpl, ...extra });
           } catch {
             return null;
           }
         };
         const [secondRes, auditRes, keyRes, partiesRes] = await Promise.all([
-          wantSecond ? call(layerPrompt("verify", VERIFY_SYSTEM_PROMPT, buildVerifyUserPrompt(firstReading))) : Promise.resolve(undefined),
-          wantAudit ? call(layerPrompt("audit", AUDIT_SYSTEM_PROMPT, AUDIT_USER_PROMPT)) : Promise.resolve(undefined),
-          wantKey ? call({ ...layerPrompt("keyfigures", KEYFIGURES_SYSTEM_PROMPT, KEYFIGURES_USER_PROMPT), responseSchema: buildKeyFiguresSchema() }) : Promise.resolve(undefined),
-          wantParties ? call({ ...layerPrompt("parties", PARTIES_SYSTEM_PROMPT, PARTIES_USER_PROMPT), responseSchema: buildPartiesSchema() }) : Promise.resolve(undefined),
+          wantSecond ? call({ systemPrompt: VERIFY_SYSTEM_PROMPT, userPrompt: buildVerifyUserPrompt(firstReading) }) : Promise.resolve(undefined),
+          wantAudit ? call({ systemPrompt: AUDIT_SYSTEM_PROMPT, userPrompt: AUDIT_USER_PROMPT }) : Promise.resolve(undefined),
+          wantKey ? call({ systemPrompt: KEYFIGURES_SYSTEM_PROMPT, userPrompt: KEYFIGURES_USER_PROMPT, responseSchema: buildKeyFiguresSchema() }) : Promise.resolve(undefined),
+          wantParties ? call({ systemPrompt: PARTIES_SYSTEM_PROMPT, userPrompt: PARTIES_USER_PROMPT, responseSchema: buildPartiesSchema() }) : Promise.resolve(undefined),
         ]);
 
         // One blind parties reading (supplier / buyer, GSTIN, PAN, state, every printed GSTIN): parse, record usage, keep it if usable.
@@ -439,7 +417,7 @@ export async function runExtraction(deps: PipelineDeps, ctx: RunContext): Promis
           if (left < MIN_TIME_FOR_CALL_MS + VERIFY_SAVE_MARGIN_MS) break;
           retries -= 1;
           const before = parties.length;
-          const res = await deps.gemini({ apiKey: cfg.apiKey, model: cfg.model, mime: ctx.mime, data: bytes, timeoutMs: Math.max(1_000, Math.min(cfg.timeoutMs, left - VERIFY_SAVE_MARGIN_MS)), maxOutputTokens: cfg.maxOutputTokens, fetchImpl: deps.fetchImpl, ...layerPrompt("parties", PARTIES_SYSTEM_PROMPT, PARTIES_USER_PROMPT), responseSchema: buildPartiesSchema() }).catch(() => null);
+          const res = await gemini({ apiKey: cfg.apiKey, model: cfg.model, mime: ctx.mime, data: bytes, timeoutMs: Math.max(1_000, Math.min(cfg.timeoutMs, left - VERIFY_SAVE_MARGIN_MS)), maxOutputTokens: cfg.maxOutputTokens, fetchImpl: deps.fetchImpl, systemPrompt: PARTIES_SYSTEM_PROMPT, userPrompt: PARTIES_USER_PROMPT, responseSchema: buildPartiesSchema() }).catch(() => null);
           if (!(await takeParties(res, "parties_retry")) || parties.length === before) break;
           layerCount += 1;
           pr = resolveParties(readingsForParties(firstReading, extraFull), parties, model);
