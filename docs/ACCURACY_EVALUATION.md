@@ -1,6 +1,6 @@
 # Accuracy evaluation and final integration check (Parts 1 to 3)
 
-Scope: dynamic prompt engine (Part 1), structured extraction (Part 2), source-grounded second verification (Part 3), working together in
+Scope: fixed reading prompt (Part 1), structured extraction (Part 2), source-grounded second verification (Part 3), working together in
 `lib/extraction/pipeline.ts`. **No application code was changed.** This part adds tests, an evaluation script and this report.
 
 ## Read this first: what was and was not measured
@@ -9,7 +9,7 @@ Scope: dynamic prompt engine (Part 1), structured extraction (Part 2), source-gr
 | Pipeline logic end to end with a scripted provider (33 invoices, 622 tests) | **Run, results below** |
 | Baseline vs updated on the same dataset, scripted provider | **Run, results below. Not real-world accuracy** |
 | Real Gemini accuracy, latency and cost | **NOT measured** (no network / API key in the build environment). `npm run eval:pipeline -- --mode live` exists for it and was only smoke-tested without network |
-| Effect of the dynamic prompt on real extraction quality | **NOT measured.** A scripted model cannot react to a prompt. Only the prompt text and its safety were tested |
+| Effect of the reading prompt on real extraction quality | **NOT measured.** A scripted model cannot react to a prompt. Only the prompt text and its safety were tested |
 | `tsc`, `next lint`, `next build`, Supabase SQL tests, Vercel deploy | **NOT run** (no `node_modules`, no network). Run them before deploying |
 
 The "model" in the simulated evaluation is hand-written: I chose which values it misreads. The numbers show what the code does with such
@@ -30,7 +30,7 @@ GEMINI_API_KEY=... npm run eval:pipeline -- --mode live --runs 3     # real meas
 
 ## Simulated baseline vs updated (33 invoices, scripted readings)
 Same dataset for each column. `baseline` = all layers that existed before Part 1 and Part 3 (second / audit / key-figures / parties readings,
-vote, line fix) with `EXTRACTION_DYNAMIC_PROMPT=off` and `EXTRACTION_SOURCE_VERIFY=off`. `updated` = current defaults.
+vote, line fix) with `EXTRACTION_SOURCE_VERIFY=off`. `updated` = current defaults.
 
 | Measure | first reading only | baseline | updated |
 |---|---|---|---|
@@ -57,7 +57,7 @@ re-read and filled when the proof holds): supplier GSTIN missing, invoice number
 total, and six cases where the scripted re-read was unreadable / ambiguous / wrong / malformed / failed.
 
 ## What the tests cover (`tests/e2e-accuracy.test.mjs`)
-Full workflow (upload bytes, dynamic prompt, parse, validate, suspicious fields, source re-read, correction, saved record, review-form column
+Full workflow (upload bytes, fixed prompt, parse, validate, suspicious fields, source re-read, correction, saved record, review-form column
 mapping, CSV / XLSX / Tally) for: clear intra-state, inter-state IGST and cess invoices; blurry / low-confidence / PNG photo; similar digits and
 decimal errors (total, unit price, quantity); wrong, missing and re-read GSTINs; CGST/SGST vs IGST; wrong taxable value and total; 12-row
 3-page invoice; legitimate repeated rows vs a block repeated by page overlap; missing and ambiguous fields; confident-but-wrong re-reads
@@ -84,7 +84,7 @@ key / invoice number / GSTIN / name / amount. The existing 596 tests (routes, au
 6. `mediaResolution: HIGH` for the source re-read is untested against live Gemini (Part 3 already noted this).
 
 ## Environment variables
-No change. Existing optional switches: `EXTRACTION_DYNAMIC_PROMPT`, `EXTRACTION_SOURCE_VERIFY` (needs `EXTRACTION_VERIFY` on). Defaults unchanged (on).
+No change. Existing optional switches: `EXTRACTION_HIGH_RES`, `EXTRACTION_SOURCE_VERIFY` (needs `EXTRACTION_VERIFY` on). Defaults unchanged (on).
 
 ## Safe deployment on Vercel
 1. Locally with network: `npm ci && npm run typecheck && npm run lint && npm test && npm run build`.
@@ -92,5 +92,5 @@ No change. Existing optional switches: `EXTRACTION_DYNAMIC_PROMPT`, `EXTRACTION_
 3. Before Production, run `GEMINI_API_KEY=... npm run eval:pipeline -- --mode live --runs 3` and keep the output: it gives the first trustworthy
    baseline (6 synthetic fixtures; add real, anonymised invoices with `*.truth.json` for a better one). Check false corrections stay 0.
 4. Check cost and time on that run: the route limit is `maxDuration = 60` s, `EXTRACTION_DEADLINE_MS` default 52000.
-5. Rollback without code change: set `EXTRACTION_SOURCE_VERIFY=off` and/or `EXTRACTION_DYNAMIC_PROMPT=off` in Vercel, then redeploy (env changes
+5. Rollback without code change: set `EXTRACTION_SOURCE_VERIFY=off` and/or `EXTRACTION_HIGH_RES=off` in Vercel, then redeploy (env changes
    apply to new deployments). No migration is needed for this part.
