@@ -134,7 +134,11 @@ export function removeCessFromLineTaxes(e: HeadsLike, items: LineLike[], taxes: 
   if (H.cess <= tolPaise) return null;
   const idx = items.map((_, i) => i).filter((i) => items[i].applied_tax_type !== "NONE" && (taxes[i] as number) !== 0);
   const total = idx.reduce((a, i) => a + (taxes[i] as number), 0);
-  const strip = (lines: number[], sum: number): (number | null)[] => {
+  // Takes the cess out of `lines` in proportion to each line's tax. A family whose lines add up to 0 (e.g. a credit line cancelling a
+  // debit line) has no proportion to split by: dividing by 0 would turn every line into +/-Infinity or NaN, so nothing is adjusted
+  // (null) and the mismatch stays visible instead.
+  const strip = (lines: number[], sum: number): (number | null)[] | null => {
+    if (!Number.isFinite(sum) || sum === 0) return null;
     const target = sum - H.cess;
     const out = [...taxes];
     let used = 0;
@@ -143,9 +147,12 @@ export function removeCessFromLineTaxes(e: HeadsLike, items: LineLike[], taxes: 
       out[i] = v;
       used += v;
     });
-    return out;
+    return out.every((t) => t === null || Number.isFinite(t)) ? out : null;
   };
-  if (isCessInclusiveLineTotal(e, items, total, tolPaise)) return { taxes: strip(idx, total), cess: H.cess };
+  if (isCessInclusiveLineTotal(e, items, total, tolPaise)) {
+    const adjusted = strip(idx, total);
+    return adjusted ? { taxes: adjusted, cess: H.cess } : null;
+  }
 
   // Several families: the lines must all be labelled and the grand sum must be GST + cess.
   const gst = totalGstPaise(H);
@@ -163,7 +170,8 @@ export function removeCessFromLineTaxes(e: HeadsLike, items: LineLike[], taxes: 
   if (off.length !== 1) return null;
   const fam = off[0];
   if (Math.abs(sums[fam] - expected[fam] - H.cess) > tolPaise) return null;
-  return { taxes: strip(idx.filter((i) => items[i].applied_tax_type === fam), sums[fam]), cess: H.cess };
+  const adjusted = strip(idx.filter((i) => items[i].applied_tax_type === fam), sums[fam]);
+  return adjusted ? { taxes: adjusted, cess: H.cess } : null;
 }
 
 // ---- Reconciliation ----------------------------------------------------------------------------------------------------
