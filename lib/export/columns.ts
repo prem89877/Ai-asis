@@ -36,6 +36,11 @@ export interface ExportInvoice {
   cess_amount: number | null;
   tax_total: number | null;
   total_amount: number | null;
+  // Bottom-line adjustments (optional: older views / callers do not carry them). NULL = not printed, never 0.
+  tcs_amount?: number | null;
+  tds_amount?: number | null;
+  round_off_amount?: number | null;
+  net_payable_amount?: number | null;
   confidence: number | null;
   review_flags: ExportFlag[] | null;
   verified_at: string | null;
@@ -106,6 +111,10 @@ export const INVOICE_COLUMNS: readonly InvoiceColumn[] = [
   { key: "cess_amount", label: "Cess", kind: "money", width: 12, group: "GST and totals", get: (i) => i.cess_amount },
   { key: "tax_total", label: "Total Tax", kind: "money", width: 14, group: "GST and totals", get: (i) => i.tax_total },
   { key: "total_amount", label: "Invoice Total", kind: "money", width: 16, group: "GST and totals", get: (i) => i.total_amount },
+  { key: "tcs_amount", label: "TCS", kind: "money", width: 12, group: "GST and totals", get: (i) => i.tcs_amount ?? null },
+  { key: "tds_amount", label: "TDS", kind: "money", width: 12, group: "GST and totals", get: (i) => i.tds_amount ?? null },
+  { key: "round_off_amount", label: "Round Off", kind: "money", width: 12, group: "GST and totals", get: (i) => i.round_off_amount ?? null },
+  { key: "net_payable_amount", label: "Net Payable", kind: "money", width: 16, group: "GST and totals", get: (i) => i.net_payable_amount ?? null },
   { key: "status", label: "Review Status", kind: "text", width: 16, group: "Review", get: (i) => REVIEW_STATE_LABEL[reviewState(i.status)] },
   { key: "verified_at", label: "Verified On", kind: "datetime", width: 18, group: "Review", get: (i) => i.verified_at },
   { key: "flag_count", label: "Open Flags", kind: "integer", width: 11, group: "Review", get: (i) => (i.review_flags ? i.review_flags.length : null) },
