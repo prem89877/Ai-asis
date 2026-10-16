@@ -100,9 +100,31 @@ export const F1 = "11111111-1111-4111-8111-1111111111f1";
 export const F2 = "22222222-2222-4222-8222-2222222222f2";
 
 // Installs the fake world for the next request: who is signed in, which firm they belong to, what is in the database.
-export function world({ user = U1, role = "owner", firm = F1, tables = {}, rpc = {}, admin = true, members, objects = {}, adminTables = {} } = {}) {
+export function world({ user = U1, role = "owner", firm = F1, tables = {}, rpc: rpcOverrides = {}, admin = true, members, objects = {}, adminTables = {} } = {}) {
+  // reserve_upload_slot / release_upload_slot behave like the SQL functions (018_quota_worker_upload_cap.sql): the count comes from
+  // upload_events (adminTables), never from invoices, and release only works for a slot whose invoice does not exist.
+  let adminDb;
+  const rpc = {
+    reserve_upload_slot: ({ p_firm_id, p_user_id, p_invoice_id, p_limit }) => {
+      const events = (adminDb.data.upload_events ??= []);
+      const since = Date.now() - 24 * 3600 * 1000;
+      const used = events.filter((e) => e.firm_id === p_firm_id && new Date(e.created_at).getTime() >= since).length;
+      if (used >= p_limit) return { data: { result: "limit", used }, error: null };
+      const id = `slot-${events.length + 1}`;
+      events.push({ id, firm_id: p_firm_id, user_id: p_user_id, invoice_id: p_invoice_id, created_at: new Date().toISOString() });
+      return { data: { result: "ok", id, used: used + 1 }, error: null };
+    },
+    release_upload_slot: ({ p_firm_id, p_event_id }) => {
+      const events = (adminDb.data.upload_events ??= []);
+      const e = events.find((x) => x.id === p_event_id && x.firm_id === p_firm_id);
+      const exists = e && (db.data.invoices ?? []).some((i) => i.id === e.invoice_id);
+      if (e && !exists) adminDb.data.upload_events = events.filter((x) => x !== e);
+      return { data: null, error: null };
+    },
+    ...rpcOverrides,
+  };
   const db = createDb({ firm_members: members ?? (user ? [{ user_id: user.id, firm_id: firm, role, created_at: "2026-01-01" }] : []), ...tables }, { rpc });
-  const adminDb = createDb(adminTables, { rpc });
+  adminDb = createDb(adminTables, { rpc });
   globalThis.__h = { db, client: userClient(db, user, objects), admin: admin ? adminDb : null, adminDb, integ: { calls: [] } };
   return globalThis.__h;
 }
