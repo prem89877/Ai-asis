@@ -33,7 +33,29 @@ export function toPaise(amount: number): number {
 
 // ---- GSTIN -----------------------------------------------------------------------------------
 
-const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+// 15-character Indian tax ids that share the GSTIN family. Only a regular GSTIN has a fixed "Z" in position 14:
+//   regular  99 AAAAA9999A E Z C   state + PAN + entity number + "Z" + check
+//   TDS      99 AAAA99999A 9 D C   state + TAN + number + "D" + check (tax deductor)
+//   TCS      99 AAAA99999A 9 C C   state + TAN + number + "C" + check (e-commerce operator)
+//   UIN      9999 AAA99999 [UO]N C embassies / UN bodies; its check character is not verified here
+export type GstinKind = "gstin" | "tds" | "tcs" | "uin";
+const GSTIN_LAYOUTS: { kind: GstinKind; re: RegExp }[] = [
+  { kind: "gstin", re: /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/ },
+  { kind: "tds", re: /^[0-9]{2}[A-Z]{4}[0-9]{5}[A-Z][0-9]D[0-9A-Z]$/ },
+  { kind: "tcs", re: /^[0-9]{2}[A-Z]{4}[0-9]{5}[A-Z][0-9]C[0-9A-Z]$/ },
+  { kind: "uin", re: /^[0-9]{4}[A-Z]{3}[0-9]{5}[UO]N[0-9A-Z]$/ },
+];
+export function gstinKind(id: string): GstinKind | null {
+  return GSTIN_LAYOUTS.find((l) => l.re.test(id))?.kind ?? null;
+}
+// Layout of the first 14 characters only (used to compute a check character). UIN is left out: no check is computed for it.
+export function gstinPrefixKind(first14: string): GstinKind | null {
+  for (const l of GSTIN_LAYOUTS) {
+    if (l.kind === "uin") continue;
+    if (l.re.test(first14 + "0")) return l.kind;
+  }
+  return null;
+}
 const GSTIN_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 export function gstinChecksumChar(first14: string): string | null {
@@ -51,7 +73,9 @@ export function gstinChecksumChar(first14: string): string | null {
 export type GstinCheck = { ok: true } | { ok: false; reason: "format" | "checksum" };
 
 export function checkGstin(gstin: string): GstinCheck {
-  if (!GSTIN_RE.test(gstin)) return { ok: false, reason: "format" };
+  const kind = gstinKind(gstin);
+  if (!kind) return { ok: false, reason: "format" };
+  if (kind === "uin") return { ok: true }; // layout only
   return gstinChecksumChar(gstin.slice(0, 14)) === gstin[14] ? { ok: true } : { ok: false, reason: "checksum" };
 }
 

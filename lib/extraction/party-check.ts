@@ -12,7 +12,7 @@
 //   4. the list of every GSTIN printed on the document (with the role the reading saw next to each),
 //   5. the state printed in the party block (characters 1 and 2 of a GSTIN are the state code).
 import { NAME_ALIASES, STATE_NAMES } from "../gst/states.ts";
-import { checkGstin, nameKey } from "./normalize.ts";
+import { checkGstin, gstinKind, nameKey } from "./normalize.ts";
 import type { ModelField, ModelOutput, PartiesReading, ReviewFlag } from "./types.ts";
 
 // ---- State codes (GSTIN characters 1-2) -------------------------------------------------------------------------------
@@ -59,7 +59,8 @@ export function isPanLayout(v: string): boolean {
 }
 
 export function gstinState(g: string): string | null {
-  return /^\d{2}/.test(g) ? g.slice(0, 2) : null;
+  const t = g.trim();
+  return /^\d{2}/.test(t) ? t.slice(0, 2) : null;
 }
 
 export function gstinPan(g: string): string | null {
@@ -203,7 +204,7 @@ function printedEntries(parties: PartiesReading[]) {
 }
 
 export function evidenceFor(gstin: string, role: Role, parties: PartiesReading[]): GstinEvidence {
-  const format_ok = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin);
+  const format_ok = gstinKind(gstin) !== null;
   const checksum_ok = checkGstin(gstin).ok;
   const state_code_ok = STATE_CODES[gstin.slice(0, 2)] !== undefined;
   const pan = gstinPan(gstin);

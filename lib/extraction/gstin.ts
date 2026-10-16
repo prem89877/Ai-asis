@@ -10,10 +10,9 @@
 // number really exists: only the GST portal lookup (gst-portal.ts) can say that.
 // A value is replaced only by evidence from the document itself: a source re-read whose quoted printed text contains the new
 // value (source-verify.ts), or a whole reading of the document that passes the check (party-check.ts).
-import { checkGstin, gstinChecksumChar } from "./normalize.ts";
+import { checkGstin, gstinChecksumChar, gstinPrefixKind } from "./normalize.ts";
 
-// Layout of the first 14 characters: state code (2 digits) + PAN (5 letters, 4 digits, 1 letter) + entity number + "Z".
-const GSTIN_PREFIX_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z$/;
+// Layout of the first 14 characters: GSTIN (state + PAN + entity number + "Z"), or TDS / TCS id (state + TAN + number + "D" / "C").
 
 export function cleanGstin(raw: string): string {
   return raw.replace(/\s+/g, "").toUpperCase();
@@ -21,7 +20,7 @@ export function cleanGstin(raw: string): string {
 
 // Modulo-36 check digit for position 15, or null when the first 14 characters are not a valid GSTIN layout.
 export function computeGstinCheckDigit(first14: string): string | null {
-  if (!GSTIN_PREFIX_RE.test(first14)) return null;
+  if (!gstinPrefixKind(first14)) return null;
   return gstinChecksumChar(first14);
 }
 
@@ -51,7 +50,7 @@ export function validateGstin(input: string | null | undefined): GstinValidation
 export const GSTIN_AUTO_CORRECTED_LABEL = "GSTIN Auto-Corrected (Checksum Fixed)";
 
 // The only suggestion: the check character (15th) that belongs to the first 14 characters. The first 14 are taken as they are.
-// Nothing is suggested when the first 14 characters do not have the GSTIN layout (state code, PAN, entity number, Z): a different
+// Nothing is suggested when the first 14 characters do not have the GSTIN layout (state code, PAN / TAN, entity number, Z / D / C): a different
 // number would be a guess, and a wrong guess is worse than none.
 export function suggestGstinFixes(raw: string): string[] {
   const g = cleanGstin(raw);
