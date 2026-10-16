@@ -43,8 +43,9 @@ export function sameStateCode(a: string | null | undefined, b: string | null | u
 // Two digits at the start of a GSTIN, or the code printed in a place of supply ("Karnataka (29)", "29-Karnataka").
 // No validation: a code that is not in the table is still returned (callers that need a valid code use stateCodeFromGstin).
 export function rawStateCode(text: string | null | undefined, kind: "gstin" | "place"): string | null {
-  if (!text) return null;
-  const m = kind === "gstin" ? /^(\d{2})/.exec(text) : /\((\d{2})\)/.exec(text) ?? /^\s*(\d{2})\b/.exec(text);
+  const t = text?.trim();
+  if (!t) return null;
+  const m = kind === "gstin" ? /^(\d{2})/.exec(t) : /\((\d{2})\)/.exec(t) ?? /^(\d{2})\b/.exec(t);
   return m ? m[1] : null;
 }
 
