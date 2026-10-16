@@ -137,3 +137,10 @@ Mixed families, no printed cess, or any other difference keep the old behaviour,
 their invoice head except exactly one, whose lines are higher by exactly the printed cess (IGST: IGST head; CGST+SGST: 2 x SGST; CGST+UTGST: 2 x UTGST).
 Cess spread over several families, a gap of any other size, or no printed cess is not adjusted and stays a mismatch. An IGST finding now lists
 each IGST line (position, taxable value, rate, tax) in `details.components[].lines`.
+
+## Shared rules (lib/gst/)
+
+- `lib/gst/states.ts`: the ONE state / UT table, aliases, UTGST set (04, 25, 26, 31, 35, 38), the SEZ rule and the intra / inter decision. Codes 25 (Daman & Diu) and 26 (Dadra & Nagar Haveli and Daman & Diu) are one UT, so a supply between them is intra-state.
+- SEZ: a supply to an SEZ is always IGST, also inside one state. It is read from the printed text ("SEZ" / "Special Economic Zone" in the place of supply or buyer name); nothing is guessed from the GSTIN.
+- `lib/gst/rates.ts`: date-aware GST rates. From 22 Sep 2025 (GST 2.0) the 12% and 28% slabs are gone (5 / 18 / 40). A 12% or 28% line on an invoice dated on or after that day gets the warning `gst_rate_date_mismatch`; 40% before it gets the same warning. Confirm the rule with your CA: rates change by notification and some supplies have transition rules. It is a flag only, no value is changed.
+- Round-off: a difference up to INR 2.00 is absorbed, but never more than 1% of the invoice value (`ROUND_OFF_MAX_PERCENT`); the soft tolerance (INR 1.00 by default) still applies on tiny bills.
