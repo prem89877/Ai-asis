@@ -314,14 +314,14 @@ export function ReviewWorkspace({ invoiceId, neighborIds, onNavigate, onClose, o
                                 <input
                                   id={id}
                                   type={f.kind === "date" ? "date" : "text"}
-                                  inputMode={f.kind === "amount" ? "decimal" : undefined}
+                                  inputMode={f.kind === "amount" || f.kind === "rate" ? "decimal" : undefined}
                                   autoCapitalize={f.kind === "gstin" || f.kind === "currency" ? "characters" : undefined}
                                   autoComplete="off"
                                   maxLength={f.kind === "gstin" ? 15 : f.kind === "currency" ? 3 : f.maxLength}
                                   value={header[f.column]}
                                   onChange={(e) => setH(f.column, e.target.value)}
                                   aria-invalid={tone ? true : undefined}
-                                  className={`mt-1 h-11 w-full rounded-lg border bg-white px-3 text-sm ${f.kind === "amount" ? "tabular-nums" : ""} ${toneClass(tone)}`}
+                                  className={`mt-1 h-11 w-full rounded-lg border bg-white px-3 text-sm ${f.kind === "amount" || f.kind === "rate" ? "tabular-nums" : ""} ${toneClass(tone)}`}
                                 />
                               )}
                               <FieldNotes ai={aiNotes} manual={manual} edited={edited} />
@@ -380,7 +380,7 @@ export function ReviewWorkspace({ invoiceId, neighborIds, onNavigate, onClose, o
                                   return (
                                     <div key={f.key} className={f.key === "description" ? "col-span-2 sm:col-span-3" : undefined}>
                                       <label htmlFor={`i${i}-${f.key}`} className="block text-xs text-ink-muted">{f.label}</label>
-                                      <input id={`i${i}-${f.key}`} type="text" autoComplete="off" aria-invalid={tone ? true : undefined} inputMode={f.kind === "amount" ? "decimal" : f.kind === "hsn" ? "numeric" : undefined} value={row[f.key]} onChange={(e) => setItem(i, f.key, e.target.value)} className={`mt-0.5 h-10 w-full rounded-lg border bg-white px-2 text-sm ${f.kind === "amount" ? "tabular-nums" : ""} ${toneClass(tone)}`} />
+                                      <input id={`i${i}-${f.key}`} type="text" autoComplete="off" aria-invalid={tone ? true : undefined} inputMode={f.kind === "amount" ? "decimal" : f.kind === "hsn" ? "numeric" : undefined} value={row[f.key]} onChange={(e) => setItem(i, f.key, e.target.value)} className={`mt-0.5 h-10 w-full rounded-lg border bg-white px-2 text-sm ${f.kind === "amount" || f.kind === "rate" ? "tabular-nums" : ""} ${toneClass(tone)}`} />
                                       <FieldNotes ai={ai} manual={manual} edited={edited} compact />
                                     </div>
                                   );
