@@ -11,7 +11,7 @@ const inter = invoice(R3, { inter: true, buyerGstin: BUYER_GSTIN_KA, number: "IN
 const MANY = Array.from({ length: 12 }, (_, i) => ({ d: `Part ${String.fromCharCode(65 + i)}`, q: i + 1, p: 100 + i * 10, r: i % 2 ? 12 : 18, hsn: String(8400 + i) }));
 const multi = invoice(MANY, { number: "INV-MP-12" });
 const dupLegit = invoice([{ d: "Bolt M8", q: 2, p: 500, r: 18 }, { d: "Bolt M8", q: 2, p: 500, r: 18 }, { d: "Nut M8", q: 4, p: 25, r: 18 }]);
-const cessInv = invoice([{ d: "Aerated drink", q: 24, p: 40, r: 28 }, { d: "Water 1L", q: 50, p: 20, r: 0 }], { cess: 96, number: "DB/0931" });
+const cessInv = invoice([{ d: "Aerated drink", q: 24, p: 40, r: 28 }, { d: "Water 1L", q: 50, p: 20, r: 0 }], { cess: 96, number: "DB/0931", date: "2025-08-20" }); // 28% + cess: only valid before GST 2.0 (22 Sep 2025), so the invoice is dated before it
 
 const faithful = (t) => oracle(t);
 const TOTAL = intra.grand_total.value; // 2301: used wherever a scenario needs the CORRECT total of the 3-row invoice
