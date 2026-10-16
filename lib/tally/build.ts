@@ -13,6 +13,7 @@
 import { toPaise as roundToPaise } from "../extraction/normalize.ts";
 import type { ExportInvoice } from "../export/columns.ts";
 import { dedupeKey } from "../integrations/mapping.ts";
+import { ROUND_OFF_MAX_PAISE, ROUND_OFF_MAX_PERCENT } from "../extraction/round-off.ts";
 
 export interface TallyConfig {
   voucherType: string;
@@ -23,6 +24,8 @@ export interface TallyConfig {
   igstLedger: string;
   cessLedger: string;
   roundOffLedger: string;
+  tcsLedger: string; // TCS collected by the supplier on top of the invoice (an asset for the buyer), debit side
+  chargesLedger: string; // freight / packing printed BEFORE tax but kept outside the taxable value, debit side
   discountLedger: string; // credit side of a commercial discount printed AFTER the taxes (total = taxable + taxes - discount)
   companyName: string; // optional; empty = Tally uses the company that is currently open
 }
@@ -36,6 +39,8 @@ export const DEFAULT_TALLY_CONFIG: TallyConfig = {
   igstLedger: "Input IGST",
   cessLedger: "Input Cess",
   roundOffLedger: "Round Off",
+  tcsLedger: "TCS Receivable",
+  chargesLedger: "Freight and Packing",
   discountLedger: "Discount Received",
   companyName: "",
 };
@@ -75,8 +80,12 @@ export interface TallyVoucher {
 export interface TallySkip { invoiceId: string; invoiceNumber: string | null; reason: string }
 
 const toPaise = (n: number | null): number => (n === null || n === undefined ? 0 : roundToPaise(Number(n)));
-const ROUND_OFF_LIMIT_PAISE = 100; // up to INR 1.00 is treated as round-off; more means the invoice does not add up
-
+// The review engine (gst-engine.ts) absorbs a difference of up to INR 2.00 (and up to 1% of the value) as round-off and marks the total
+// "verified". The export uses the SAME window, so an invoice the engine passed is never skipped here. INR 1.00 is the floor (soft tolerance).
+const SOFT_TOLERANCE_PAISE = 100;
+export function roundOffLimitPaise(totalPaise: number): number {
+  return Math.max(SOFT_TOLERANCE_PAISE, Math.min(ROUND_OFF_MAX_PAISE, Math.round((Math.abs(totalPaise) * ROUND_OFF_MAX_PERCENT) / 100)));
+}
 export function buildVouchers(invoices: ExportInvoice[], config: TallyConfig): { vouchers: TallyVoucher[]; skipped: TallySkip[] } {
   const vouchers: TallyVoucher[] = [];
   const skipped: TallySkip[] = [];
@@ -90,7 +99,8 @@ export function buildVouchers(invoices: ExportInvoice[], config: TallyConfig): {
     if (!inv.invoice_date || !/^\d{4}-\d{2}-\d{2}$/.test(inv.invoice_date)) { skip("Invoice date is missing."); continue; }
     if (!inv.vendor_name?.trim()) { skip("Supplier name is missing."); continue; }
     if (inv.total_amount === null || inv.taxable_amount === null) { skip("Taxable value or invoice total is missing."); continue; }
-    if (inv.currency && inv.currency !== "INR") { skip(`Currency ${inv.currency} is not supported; only INR.`); continue; }
+    const currency = inv.currency?.trim().toUpperCase();
+    if (currency && currency !== "INR") { skip(`Currency ${inv.currency} is not supported; only INR.`); continue; }
     const key = dedupeKey(inv);
     if (key && seen.has(key)) { skip("Duplicate of another invoice in this export."); continue; }
     if (key) seen.add(key);
@@ -103,24 +113,35 @@ export function buildVouchers(invoices: ExportInvoice[], config: TallyConfig): {
       { ledger: config.utgstLedger, paise: toPaise(inv.utgst_amount ?? 0) }, // own ledger: UTGST is never booked to the SGST ledger
       { ledger: config.igstLedger, paise: toPaise(inv.igst_amount) },
       { ledger: config.cessLedger, paise: toPaise(inv.cess_amount) },
+      { ledger: config.tcsLedger, paise: Math.abs(toPaise(inv.tcs_amount ?? null)) }, // TCS is charged on top of the invoice, inside the printed total
     ].filter((p) => p.paise !== 0);
     if (total <= 0) { skip("Invoice total must be above zero."); continue; }
     if (parts.some((p) => p.paise < 0)) { skip("Negative amounts (credit notes) are not supported."); continue; }
 
     const sum = parts.reduce((s, p) => s + p.paise, 0);
+    const limit = roundOffLimitPaise(total);
     let diff = total - sum; // > 0: total is more than the parts, so a round-off DEBIT is needed
-    // A commercial discount printed after the taxes: the printed total is taxable + taxes - discount. The gap is exactly the discount,
-    // so it is booked to its own ledger instead of the invoice being skipped (a discount is not TDS and not round-off).
+    // Two things that are printed and are neither round-off nor a misread, so they get their own ledger instead of a skip:
+    //  * pre-tax charges (freight / packing) that the invoice kept OUTSIDE the taxable value: they add to the total (debit);
+    //  * a commercial discount printed AFTER the taxes: it reduces the total (credit).
+    // Each is tried only when the invoice does not already balance without it, so charges already inside the taxable value are not booked twice.
+    const charges = Math.abs(toPaise(inv.pre_tax_charges ?? null));
     const discount = inv.discount_amount === null || inv.discount_amount === undefined ? 0 : Math.abs(toPaise(inv.discount_amount));
+    let chargesEntry = 0;
     let discountEntry = 0;
-    if (diff < -ROUND_OFF_LIMIT_PAISE && discount > 0 && Math.abs(-diff - discount) <= ROUND_OFF_LIMIT_PAISE) {
-      discountEntry = discount;
-      diff += discount;
+    if (Math.abs(diff) > limit) {
+      const options: [number, number][] = [];
+      if (charges > 0) options.push([charges, 0]);
+      if (discount > 0) options.push([0, discount]);
+      if (charges > 0 && discount > 0) options.push([charges, discount]);
+      const hit = options.find(([c, d]) => Math.abs(diff - c + d) <= limit);
+      if (hit) { chargesEntry = hit[0]; discountEntry = hit[1]; diff = diff - chargesEntry + discountEntry; }
     }
-    if (Math.abs(diff) > ROUND_OFF_LIMIT_PAISE) { skip(`Taxable value plus taxes is ${money(sum)} but the invoice total is ${money(total)} (difference ${money(Math.abs(diff))}). Correct the figures in Review, verify again, then export.`); continue; }
+    if (Math.abs(diff) > limit) { skip(`Taxable value plus taxes is ${money(sum)} but the invoice total is ${money(total)} (difference ${money(Math.abs(diff))}). Correct the figures in Review, verify again, then export.`); continue; }
 
     const entries: TallyEntry[] = [{ ledger: inv.vendor_name.trim(), side: "Cr", paise: total, isParty: true }];
     for (const p of parts) entries.push({ ledger: p.ledger, side: "Dr", paise: p.paise, isParty: false });
+    if (chargesEntry > 0) entries.push({ ledger: config.chargesLedger, side: "Dr", paise: chargesEntry, isParty: false });
     if (discountEntry > 0) entries.push({ ledger: config.discountLedger, side: "Cr", paise: discountEntry, isParty: false });
     if (diff > 0) entries.push({ ledger: config.roundOffLedger, side: "Dr", paise: diff, isParty: false });
     if (diff < 0) entries.push({ ledger: config.roundOffLedger, side: "Cr", paise: -diff, isParty: false });
