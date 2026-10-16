@@ -36,14 +36,20 @@ export function istStamp(d: Date): string {
 
 export async function generateExport(supabase: SupabaseClient, firmId: string, spec: ExportSpec): Promise<ExportResult> {
   try {
+    // The same id twice (an older export record, another caller) is one invoice: it must not be counted, exported or "skipped" twice.
+    const wanted = Array.from(new Set(spec.invoiceIds));
     const invoices: ExportInvoice[] = [];
-    for (let i = 0; i < spec.invoiceIds.length; i += CHUNK) {
-      const { data, error } = await supabase.from("invoice_review_list").select(INVOICE_SELECT).eq("firm_id", firmId).in("id", spec.invoiceIds.slice(i, i + CHUNK));
+    for (let i = 0; i < wanted.length; i += CHUNK) {
+      const { data, error } = await supabase.from("invoice_review_list").select(INVOICE_SELECT).eq("firm_id", firmId).in("id", wanted.slice(i, i + CHUNK));
       if (error) throw new Error(`invoice_query_failed: ${errDetail(error)}`);
       invoices.push(...((data ?? []) as unknown as ExportInvoice[]));
     }
-    const eligible = invoices.filter((inv) => hasExtractedData(inv.status) && (!spec.verifiedOnly || inv.status === "verified"));
-    const skipped = spec.invoiceIds.length - eligible.length;
+    // The database returns rows in its own order. The file follows the order the person selected (also on a later re-download).
+    const position = new Map(wanted.map((id, i) => [id, i]));
+    const eligible = invoices
+      .filter((inv) => hasExtractedData(inv.status) && (!spec.verifiedOnly || inv.status === "verified"))
+      .sort((a, b) => (position.get(a.id) ?? 0) - (position.get(b.id) ?? 0));
+    const skipped = wanted.length - eligible.length;
     if (eligible.length === 0) {
       return { ok: false, status: 422, error: spec.verifiedOnly ? "None of the selected invoices are verified." : "None of the selected invoices have extracted data to export yet." };
     }

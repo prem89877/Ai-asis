@@ -21,7 +21,8 @@ function colMap<T extends { key: string }>(all: readonly T[]): Map<string, T> {
   return new Map(all.map((c) => [c.key, c]));
 }
 
-// Stable, readable order: invoice date, then number, then upload time.
+// Stable, readable order: invoice date, then number, then upload time. Rows that still tie keep the order of the input array
+// (generateExport passes the order the person selected), never the database order.
 export function sortInvoices(invoices: ExportInvoice[]): ExportInvoice[] {
   return [...invoices].sort((a, b) => {
     const d = (a.invoice_date ?? "9999-12-31").localeCompare(b.invoice_date ?? "9999-12-31");
