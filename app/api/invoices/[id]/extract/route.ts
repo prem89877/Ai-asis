@@ -4,26 +4,14 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getPrimaryMembership } from "@/lib/auth/session";
 import { isSameOrigin } from "@/lib/security/origin";
 import { UUID_RE } from "@/lib/invoices/validation";
-import { getCheckConfig, getFxConfig, getGeminiConfig, getLimits } from "@/lib/extraction/config";
-import { createFxLookup } from "@/lib/extraction/fx-rates";
+import { getGeminiConfig } from "@/lib/extraction/config";
 import { userMessage } from "@/lib/extraction/errors";
-import { callGemini } from "@/lib/extraction/gemini";
-import { createGstPortalLookup } from "@/lib/extraction/gst-portal";
-import { runExtraction } from "@/lib/extraction/pipeline";
-import { createSupabaseFiles, createSupabaseFxCache, createSupabaseStore } from "@/lib/extraction/store";
+import { claimJob, isFullClaim, runClaimedJob } from "@/lib/extraction/worker";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 // One invoice per request. Keep this above EXTRACTION_DEADLINE_MS (default 150 s) and below EXTRACTION_STALE_SECONDS (default 240 s).
 export const maxDuration = 200;
-
-interface ClaimResult {
-  result: "claimed" | "not_found" | "no_job" | "already_processing" | "not_queued" | "busy";
-  job_id?: string;
-  storage_path?: string;
-  mime_type?: string;
-  sha256?: string;
-}
 
 // Runs extraction for one queued invoice. The Gemini key and the service-role key stay on the server.
 export async function POST(request: Request, { params }: { params: { id: string } }) {
@@ -48,21 +36,10 @@ export async function POST(request: Request, { params }: { params: { id: string 
   const admin = createAdminClient();
   const geminiConfig = getGeminiConfig();
   if (!admin || !geminiConfig) return json({ error: "AI extraction is not configured on this server." }, 503);
-  const limits = getLimits();
-  const fxConfig = getFxConfig();
 
   try {
-    const { data, error } = await admin.rpc("claim_extraction_job", {
-      p_invoice_id: params.id,
-      p_firm_id: membership.firmId,
-      p_max_concurrent: limits.maxConcurrent,
-      p_stale_seconds: limits.staleSeconds,
-    });
-    if (error || !data) {
-      console.error("claim_failed", { invoiceId: params.id, code: error?.code ?? null });
-      return json({ error: "Processing could not be started. Try again." }, 500);
-    }
-    const claim = data as ClaimResult;
+    const claim = await claimJob(admin, params.id, membership.firmId);
+    if (!claim) return json({ error: "Processing could not be started. Try again." }, 500);
     switch (claim.result) {
       case "not_found":
         return json({ error: "Not found." }, 404);
@@ -74,31 +51,11 @@ export async function POST(request: Request, { params }: { params: { id: string 
       case "busy":
         return json({ error: "Other invoices are being processed. Retrying shortly." }, 429, { "Retry-After": "5" });
     }
-    if (claim.result !== "claimed" || !claim.job_id || !claim.storage_path || !claim.mime_type || !claim.sha256) {
+    if (!isFullClaim(claim)) {
       return json({ error: "Processing could not be started. Try again." }, 500);
     }
 
-    const result = await runExtraction(
-      {
-        store: createSupabaseStore(admin),
-        files: createSupabaseFiles(admin),
-        gemini: callGemini,
-        geminiConfig,
-        checkConfig: getCheckConfig(),
-        gstPortal: createGstPortalLookup(),
-        fx: fxConfig.enabled ? createFxLookup({ cache: createSupabaseFxCache(admin), timeoutMs: fxConfig.timeoutMs }) : null,
-        maxPdfPages: limits.maxPdfPages,
-      },
-      {
-        jobId: claim.job_id,
-        invoiceId: params.id,
-        firmId: membership.firmId,
-        userId: user.id,
-        storagePath: claim.storage_path,
-        mime: claim.mime_type,
-        sha256: claim.sha256,
-      }
-    );
+    const result = await runClaimedJob(admin, geminiConfig, claim, { invoiceId: params.id, firmId: membership.firmId, userId: user.id });
 
     return json({
       status: result.outcome,
