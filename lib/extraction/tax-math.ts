@@ -14,23 +14,18 @@
 // sgst_amount have utgst_amount = null and still work (the sum is the same).
 import { isForeign, hasRate } from "./arithmetic.ts";
 import { toPaise } from "./normalize.ts";
+import { isIntraStateSupply, isSezSupply, NO_STATE_CODES, rawStateCode, UTGST_STATE_CODES } from "../gst/states.ts";
 import { hasStateTax, removeCessFromLineTaxes, stateTaxLabel } from "./tax-components.ts";
 import type { ReviewFlag, StoredExtracted, StoredItem } from "./types.ts";
 
-// GST state codes of Union Territories WITHOUT a legislature: Chandigarh 04, Dadra & Nagar Haveli and Daman & Diu 26,
-// Lakshadweep 31, Andaman & Nicobar 35, Ladakh 38. Delhi 07, Puducherry 34 and Jammu & Kashmir 01 charge SGST.
-export const UTGST_STATE_CODES: ReadonlySet<string> = new Set(["04", "26", "31", "35", "38"]);
-const NO_STATE_CODES = new Set(["96", "97"]); // 96 = foreign country, 97 = other territory
+// The UTGST set (04, 25, 26, 31, 35, 38) and the state table are shared: lib/gst/states.ts.
+export { UTGST_STATE_CODES };
 
 const has = (v: number | null | undefined): v is number => v !== null && v !== undefined;
 const nonZero = (v: number | null | undefined): boolean => has(v) && v !== 0;
 const p = (v: number | null | undefined): number => (has(v) ? toPaise(v) : 0);
 
-function stateOf(text: string | null | undefined, kind: "gstin" | "place"): string | null {
-  if (!text) return null;
-  const m = kind === "gstin" ? /^(\d{2})/.exec(text) : /\((\d{2})\)/.exec(text) ?? /^\s*(\d{2})\b/.exec(text);
-  return m ? m[1] : null;
-}
+const stateOf = rawStateCode;
 
 export type TaxRegimeKind = "intra_state" | "inter_state" | "not_determined";
 export interface TaxRegime {
@@ -42,12 +37,13 @@ export interface TaxRegime {
 }
 
 // Which tax heads a supply is expected to carry, from the supplier GSTIN state and the place of supply.
-export function taxRegimeOf(e: Pick<StoredExtracted, "vendor_gstin" | "place_of_supply">): TaxRegime {
+export function taxRegimeOf(e: Pick<StoredExtracted, "vendor_gstin" | "place_of_supply"> & { buyer_name?: string | null }): TaxRegime {
   const sup = stateOf(e.vendor_gstin, "gstin");
   const pos = stateOf(e.place_of_supply, "place");
   const head: TaxRegime["stateTaxHead"] = sup === null ? null : UTGST_STATE_CODES.has(sup) ? "UTGST" : "SGST";
   if (!sup || !pos || NO_STATE_CODES.has(pos)) return { kind: "not_determined", supplierState: sup, placeOfSupplyState: pos, expectedHeads: null, stateTaxHead: head };
-  if (sup === pos) return { kind: "intra_state", supplierState: sup, placeOfSupplyState: pos, expectedHeads: head === "UTGST" ? "CGST+UTGST" : "CGST+SGST", stateTaxHead: head };
+  // SEZ supplies are inter-state even inside one state; codes 25 and 26 are one UT (lib/gst/states.ts).
+  if (isIntraStateSupply(sup, pos, isSezSupply(e)) === true) return { kind: "intra_state", supplierState: sup, placeOfSupplyState: pos, expectedHeads: head === "UTGST" ? "CGST+UTGST" : "CGST+SGST", stateTaxHead: head };
   return { kind: "inter_state", supplierState: sup, placeOfSupplyState: pos, expectedHeads: "IGST", stateTaxHead: head };
 }
 

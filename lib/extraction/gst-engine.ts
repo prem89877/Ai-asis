@@ -10,6 +10,7 @@
 // An invoice is shown as "verified" only when every method that could run agrees. Disagreement is never hidden.
 import { checkLineItems, hasRate, isForeign, rateToleranceFor } from "./arithmetic.ts";
 import { describeIdentifierProblem, isValidAckNo, isValidEwayBill, isValidIrn } from "./identifiers.ts";
+import { isIntraStateSupply, isSezSupply, rawStateCode } from "../gst/states.ts";
 import { toPaise } from "./normalize.ts";
 import { hasStateTax, isCessInclusiveLineTotal, known as knownAmt, reconcileHeads, removeCessFromLineTaxes, splitLineTaxes, stateTaxPaise, taxHeadsPaise, totalTaxPaise } from "./tax-components.ts";
 import { checkTaxHeads, diagnoseTotalMismatch, type TaxRegime } from "./tax-math.ts";
@@ -18,8 +19,11 @@ import type { ReviewFlag, StoredExtracted, StoredItem } from "./types.ts";
 
 export { validateLineItem } from "./arithmetic.ts";
 
-// A difference up to this (INR 2.00) is absorbed into round_off_amount and the total check PASSES.
+// A difference up to this (INR 2.00) is absorbed into round_off_amount and the total check PASSES, but never more than
+// ROUND_OFF_MAX_PERCENT of the invoice value: INR 2.00 is a rounding on a INR 5,000 bill and a misread on a INR 10 bill.
+// The soft tolerance (tolerancePaise, INR 1.00 by default) always still applies, so a tiny invoice is not failed for a rupee.
 export const ROUND_OFF_MAX_PAISE = 200;
+export const ROUND_OFF_MAX_PERCENT = 1;
 const MAX_INFERENCE_LINES = 16; // 2^16 line splits are tried when IGST and CGST/SGST are mixed and lines carry no tax type
 
 export interface EngineOptions {
@@ -279,7 +283,7 @@ export function validateInvoiceTotals(e: StoredExtracted, items: StoredItem[], o
   const diff = actual - b.value;
   const expectedGrand = tier1(base0) / 100;
   const expectedNet = tds !== 0 ? tier2(base0) / 100 : null;
-  const absorbMax = Math.max(tol, ROUND_OFF_MAX_PAISE);
+  const absorbMax = Math.max(tol, Math.min(ROUND_OFF_MAX_PAISE, Math.round((Math.abs(b.value) * ROUND_OFF_MAX_PERCENT) / 100)));
 
   let calcPaise = b.value;
   const verdict = (matched: boolean, roundOffApplied: number | null = null): TotalsResult => ({
@@ -301,7 +305,7 @@ export function validateInvoiceTotals(e: StoredExtracted, items: StoredItem[], o
   } else if (Math.abs(diff) <= absorbMax) {
     matched = true;
     if (diff !== 0) {
-      // Difference of up to INR 2.00: absorbed into round_off_amount, total check PASSES. Normal rounding (within the soft
+      // Difference of up to INR 2.00 (and up to ROUND_OFF_MAX_PERCENT of the value): absorbed into round_off_amount, total check PASSES. Normal rounding (within the soft
       // tolerance) is silent; a larger absorbed difference leaves an info note so nobody is surprised by it.
       absorbed = diff;
       if (Math.abs(diff) > tol) flags.push({
@@ -507,12 +511,6 @@ export interface Verification {
   disagreeing: string[];
 }
 
-function stateOf(text: string | null | undefined, kind: "gstin" | "place"): string | null {
-  if (!text) return null;
-  const m = kind === "gstin" ? /^(\d{2})/.exec(text) : /\((\d{2})\)/.exec(text) ?? /^\s*(\d{2})\b/.exec(text);
-  return m ? m[1] : null;
-}
-
 export function tripleCheckTax(e: StoredExtracted, items: StoredItem[], tolerancePaise: number): Verification {
   const tol = tolerancePaise + Math.min(items.length, 200);
   const methods: Verification["methods"] = [];
@@ -538,12 +536,14 @@ export function tripleCheckTax(e: StoredExtracted, items: StoredItem[], toleranc
   }
 
   // Fourth, rule-based method: supplier state vs place of supply decides which tax head is expected.
-  const sup = stateOf(e.vendor_gstin, "gstin"), pos = stateOf(e.place_of_supply, "place");
+  const sup = rawStateCode(e.vendor_gstin, "gstin"), pos = rawStateCode(e.place_of_supply, "place");
   const mixed = nonZero(e.igst_amount) && (nonZero(e.cgst_amount) || hasStateTax(e));
-  if (sup && pos && pos !== "96" && pos !== "97" && !mixed && header !== 0) {
-    const intra = sup === pos;
+  const sez = isSezSupply({ place_of_supply: e.place_of_supply, buyer_name: e.buyer_name });
+  const intraSupply = isIntraStateSupply(sup, pos, sez); // SEZ is always inter-state; 25 and 26 are one UT; 96 / 97 are not decided
+  if (intraSupply !== null && !mixed && header !== 0) {
+    const intra = intraSupply;
     const ok = intra ? !nonZero(e.igst_amount) : !(nonZero(e.cgst_amount) || hasStateTax(e));
-    methods.push({ id: "state_rule", label: intra ? "Same state: CGST + SGST / UTGST expected" : "Different states: IGST expected", value: header / 100 });
+    methods.push({ id: "state_rule", label: intra ? "Same state: CGST + SGST / UTGST expected" : sez ? "Supply to an SEZ: IGST expected" : "Different states: IGST expected", value: header / 100 });
     if (!ok) disagreeing.push("state_rule");
   }
   const level: Verification["level"] = disagreeing.length > 0 ? "unverified" : methods.length >= 3 ? "verified" : "partial";

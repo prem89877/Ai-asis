@@ -16,6 +16,7 @@
 //               reading that already gave the same text (invoice number).
 //   unresolved  anything else. Nothing is changed; the proposal and the evidence are kept and the field is flagged for a person.
 // The original value is always kept (field_status[...].autoCorrected.from, validation_summary.source_verification, raw_extraction).
+import { checkGstRate } from "../gst/rates.ts";
 import { hasRate, isForeign } from "./arithmetic.ts";
 import { validateInvoice } from "./gst-engine.ts";
 import { ocrPlausible } from "./line-fix.ts";
@@ -69,7 +70,6 @@ export const MAX_TARGETS = 14;
 const MAX_ITEM_ROWS = 6;
 export const MIN_CONFIDENCE = 0.9; // a re-read below this never corrects anything
 const GST_START = "2017-07-01";
-const GST_SLABS = new Set([0, 0.1, 0.25, 0.5, 1, 1.5, 3, 5, 6, 7.5, 12, 14, 18, 28, 40]);
 
 // ---- Field table -----------------------------------------------------------------------------------------------------------------
 
@@ -206,7 +206,7 @@ export function detectSuspicious(inp: DetectInput): Target[] {
       if (m.state === "unreadable") add("item", key, "the first reading could not read it", i + 1);
       else if ((m.state === "value" || m.state === "zero") && m.confidence < inp.lowConfidence) add("item", key, `low confidence (${m.confidence})`, i + 1);
     }
-    if (it.gst_rate !== null && !GST_SLABS.has(it.gst_rate)) add("item", "gst_rate", `${it.gst_rate}% is not a usual GST rate`, i + 1);
+    if (it.gst_rate !== null && checkGstRate(it.gst_rate, e.invoice_date) !== "ok") add("item", "gst_rate", `${it.gst_rate}% is not a GST rate that exists on the invoice date`, i + 1);
   });
 
   // Priority: identifiers first, then totals, then item cells; at most MAX_ITEM_ROWS rows and MAX_TARGETS targets.

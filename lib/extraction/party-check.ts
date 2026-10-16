@@ -11,26 +11,21 @@
 //   3. the printed PAN of the party (characters 3 to 12 of a GSTIN ARE the PAN),
 //   4. the list of every GSTIN printed on the document (with the role the reading saw next to each),
 //   5. the state printed in the party block (characters 1 and 2 of a GSTIN are the state code).
+import { NAME_ALIASES, STATE_NAMES } from "../gst/states.ts";
 import { checkGstin, nameKey } from "./normalize.ts";
 import type { ModelField, ModelOutput, PartiesReading, ReviewFlag } from "./types.ts";
 
 // ---- State codes (GSTIN characters 1-2) -------------------------------------------------------------------------------
 
-export const STATE_CODES: Readonly<Record<string, string>> = {
-  "01": "Jammu and Kashmir", "02": "Himachal Pradesh", "03": "Punjab", "04": "Chandigarh", "05": "Uttarakhand", "06": "Haryana",
-  "07": "Delhi", "08": "Rajasthan", "09": "Uttar Pradesh", "10": "Bihar", "11": "Sikkim", "12": "Arunachal Pradesh", "13": "Nagaland",
-  "14": "Manipur", "15": "Mizoram", "16": "Tripura", "17": "Meghalaya", "18": "Assam", "19": "West Bengal", "20": "Jharkhand",
-  "21": "Odisha", "22": "Chhattisgarh", "23": "Madhya Pradesh", "24": "Gujarat", "25": "Daman and Diu", "26": "Dadra and Nagar Haveli and Daman and Diu",
-  "27": "Maharashtra", "28": "Andhra Pradesh (old)", "29": "Karnataka", "30": "Goa", "31": "Lakshadweep", "32": "Kerala", "33": "Tamil Nadu",
-  "34": "Puducherry", "35": "Andaman and Nicobar Islands", "36": "Telangana", "37": "Andhra Pradesh", "38": "Ladakh", "97": "Other Territory", "99": "Centre Jurisdiction",
-};
+// Built from the shared table (lib/gst/states.ts). GSTIN characters 1-2 can never be 96 (foreign country), so it is left out here.
+export const STATE_CODES: Readonly<Record<string, string>> = Object.fromEntries(
+  Object.entries(STATE_NAMES).filter(([c]) => c !== "96").map(([c, n]) => [c, n.replace(/&/g, "and")]),
+);
 
 // Name -> code, for text such as "Karnataka" or "Tamil Nadu" (place of supply / state printed in a party block).
 const NAME_TO_CODE: [string, string][] = [
   ...Object.entries(STATE_CODES).map(([code, name]) => [nameKey(name) as string, code] as [string, string]),
-  [nameKey("Orissa") as string, "21"], [nameKey("Pondicherry") as string, "34"], [nameKey("Uttaranchal") as string, "05"],
-  [nameKey("NCT of Delhi") as string, "07"], [nameKey("New Delhi") as string, "07"], [nameKey("Jammu & Kashmir") as string, "01"],
-  [nameKey("Dadra and Nagar Haveli") as string, "26"], [nameKey("Daman & Diu") as string, "25"], [nameKey("Chattisgarh") as string, "22"],
+  ...Object.entries(NAME_ALIASES).map(([name, code]) => [nameKey(name) as string, code] as [string, string]),
 ];
 
 // "Karnataka (29)", "29-Karnataka", "State Code: 29", "Karnataka": the two-digit code if one is printed, else the code of a state name.
@@ -38,7 +33,7 @@ export function stateCodeFromText(text: string | null | undefined): string | nul
   if (!text) return null;
   const printed = /\((\d{2})\)/.exec(text) ?? /(?:state\s*code|code)\s*[:\-]?\s*(\d{2})\b/i.exec(text) ?? /^\s*(\d{2})\b/.exec(text);
   if (printed) return STATE_CODES[printed[1]] ? printed[1] : null;
-  const key = nameKey(text);
+  const key = nameKey(text.replace(/&/g, " and ")); // "Daman & Diu" and "Daman and Diu" are the same name
   if (!key) return null;
   // Longest state name first, so "Andhra Pradesh" is not mistaken for something shorter.
   const hits = NAME_TO_CODE.filter(([n]) => key.includes(n)).sort((a, b) => b[0].length - a[0].length);

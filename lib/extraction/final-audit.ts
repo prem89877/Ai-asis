@@ -15,6 +15,7 @@
 // in the report and in ONE review flag, so a person looks at exactly those.
 import { cleanIdentifier } from "./identifiers.ts";
 import { checkGstin } from "./normalize.ts";
+import { sameStateCode } from "../gst/states.ts";
 import { gstinIsValid, gstinPan, isPanLayout, namesCompatible, normGstin, STATE_CODES, stateCodeFromText } from "./party-check.ts";
 import type { GstinVerdict } from "./party-check.ts";
 import { sameField } from "./verify.ts";
@@ -141,7 +142,7 @@ function layerRules(inp: AuditInput): AuditLayer {
     const code = /\((\d{2})\)/.exec(e.place_of_supply)?.[1] ?? /^\s*(\d{2})\b/.exec(e.place_of_supply)?.[1] ?? null;
     const byName = stateCodeFromText(e.place_of_supply.replace(/\(\s*\d{2}\s*\)|^\s*\d{2}\b/g, ""));
     if (code && !STATE_CODES[code]) fail("place_of_supply", `State code ${code} is not a GST state code.`);
-    else if (code && byName && code !== byName) fail("place_of_supply", `The printed state code ${code} and the state name (${STATE_CODES[byName]}) do not match.`);
+    else if (code && byName && !sameStateCode(code, byName)) fail("place_of_supply", `The printed state code ${code} and the state name (${STATE_CODES[byName]}) do not match.`);
   }
 
   // Currency
