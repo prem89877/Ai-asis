@@ -5,29 +5,13 @@
 // TCS, TDS, round-off, pre-tax charges, mixed IGST + CGST/SGST and e-invoice metadata are handled by gst-engine.ts.
 // Not modelled: reverse charge, composition-scheme specifics. See docs/GST_ENGINE.md.
 import { toPaise } from "../extraction/normalize.ts";
+import { checkGstRate, rateDateNote, ALL_GST_RATES } from "../gst/rates.ts";
+import { isIntraStateSupply, isSezSupply, NAME_ALIASES, sameStateCode, STATE_NAMES } from "../gst/states.ts";
 import type { ReviewFlag, StoredExtracted, StoredItem } from "../extraction/types.ts";
 
-// GST state / UT codes (first two digits of a GSTIN and the code printed after the place of supply).
-export const STATE_NAMES: Record<string, string> = {
-  "01": "Jammu & Kashmir", "02": "Himachal Pradesh", "03": "Punjab", "04": "Chandigarh", "05": "Uttarakhand",
-  "06": "Haryana", "07": "Delhi", "08": "Rajasthan", "09": "Uttar Pradesh", "10": "Bihar", "11": "Sikkim",
-  "12": "Arunachal Pradesh", "13": "Nagaland", "14": "Manipur", "15": "Mizoram", "16": "Tripura", "17": "Meghalaya",
-  "18": "Assam", "19": "West Bengal", "20": "Jharkhand", "21": "Odisha", "22": "Chhattisgarh", "23": "Madhya Pradesh",
-  "24": "Gujarat", "26": "Dadra & Nagar Haveli and Daman & Diu", "27": "Maharashtra", "28": "Andhra Pradesh (old)",
-  "29": "Karnataka", "30": "Goa", "31": "Lakshadweep", "32": "Kerala", "33": "Tamil Nadu", "34": "Puducherry",
-  "35": "Andaman & Nicobar Islands", "36": "Telangana", "37": "Andhra Pradesh", "38": "Ladakh",
-  "96": "Foreign country", "97": "Other territory", "99": "Centre jurisdiction",
-};
-
-// Extra spellings that people print on invoices.
-const NAME_ALIASES: Record<string, string> = {
-  "orissa": "21", "pondicherry": "34", "uttaranchal": "05", "chattisgarh": "22", "jammu and kashmir": "01",
-  "andaman and nicobar islands": "35", "andaman and nicobar": "35", "dadra and nagar haveli": "26", "daman and diu": "26",
-  "dadra and nagar haveli and daman and diu": "26", "new delhi": "07", "nct of delhi": "07", "delhi ncr": "07",
-};
-
-// Rates in common use. Rates change by notification, so this is a hint list: an unlisted rate is only INFO.
-export const COMMON_GST_RATES: readonly number[] = [0, 0.1, 0.25, 1, 1.5, 3, 5, 6, 7.5, 12, 18, 28, 40];
+// State table, aliases, UTGST set and the SEZ rule live in lib/gst/states.ts; the rate list in lib/gst/rates.ts (one copy each).
+export { STATE_NAMES };
+export const COMMON_GST_RATES: readonly number[] = ALL_GST_RATES;
 
 function norm(s: string): string {
   return s.toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
@@ -66,7 +50,7 @@ export interface GstOptions {
 type Doc = Pick<
   StoredExtracted,
   "document_type" | "vendor_gstin" | "place_of_supply" | "taxable_amount" | "total_amount" | "cgst_amount" | "sgst_amount" | "utgst_amount" | "igst_amount" | "cess_amount"
->;
+> & { invoice_date?: string | null; buyer_name?: string | null };
 
 export function gstChecks(doc: Doc, items: StoredItem[], opts: GstOptions): ReviewFlag[] {
   const flags: ReviewFlag[] = [];
@@ -81,8 +65,10 @@ export function gstChecks(doc: Doc, items: StoredItem[], opts: GstOptions): Revi
   const supplierState = stateCodeFromGstin(doc.vendor_gstin);
   const pos = stateCodeFromPlace(doc.place_of_supply);
   const special = pos === "96" || pos === "97"; // exports, other territory: tax treatment differs, no intra/inter rule applied
+  // A supply to an SEZ is IGST even inside one state (see isSezSupply in lib/gst/states.ts), and 25 / 26 are one UT.
+  const sez = isSezSupply({ place_of_supply: doc.place_of_supply, buyer_name: doc.buyer_name });
   if (supplierState && pos && !special) {
-    const intra = supplierState === pos;
+    const intra = isIntraStateSupply(supplierState, pos, sez) === true;
     if (intra && hasIgst && !hasCgstSgst) {
       flags.push({
         code: "gst_type_mismatch", severity: "warning", field: "igst",
@@ -91,10 +77,13 @@ export function gstChecks(doc: Doc, items: StoredItem[], opts: GstOptions): Revi
       });
     }
     if (!intra && hasCgstSgst && !hasIgst) {
+      const sezSameState = sez && sameStateCode(supplierState, pos);
       flags.push({
         code: "gst_type_mismatch", severity: "warning", field: "cgst",
-        message: `Supplier is in ${STATE_NAMES[supplierState]} and the place of supply is ${STATE_NAMES[pos]}, so IGST is normally charged. CGST/SGST was charged. Check the original.`,
-        details: { supplierState, placeOfSupplyState: pos },
+        message: sezSameState
+          ? `This is a supply to an SEZ, which is charged IGST even inside ${STATE_NAMES[supplierState]}. CGST/SGST was charged. Check the original.`
+          : `Supplier is in ${STATE_NAMES[supplierState]} and the place of supply is ${STATE_NAMES[pos]}, so IGST is normally charged. CGST/SGST was charged. Check the original.`,
+        details: { supplierState, placeOfSupplyState: pos, ...(sez ? { sez: true } : {}) },
       });
     }
   } else if (anyTax && type !== "bill_of_supply" && !special) {
@@ -138,8 +127,14 @@ export function gstChecks(doc: Doc, items: StoredItem[], opts: GstOptions): Revi
   let expectedTotal = 0;
   items.forEach((it, i) => {
     const rate = it.gst_rate;
-    if (rate !== null && !COMMON_GST_RATES.includes(rate)) {
-      flags.push({ code: "unusual_gst_rate", severity: "info", field: "gst_rate", itemPosition: i + 1, message: `The GST rate ${rate}% is not a commonly used rate. Check the original.` });
+    if (rate !== null) {
+      // Date-aware (lib/gst/rates.ts): 12% / 28% on an invoice dated on or after 22 Sep 2025 is a WARNING, any other odd rate stays INFO.
+      const verdict = checkGstRate(rate, doc.invoice_date ?? null);
+      if (verdict === "retired" || verdict === "not_yet") {
+        flags.push({ code: "gst_rate_date_mismatch", severity: "warning", field: "gst_rate", itemPosition: i + 1, message: rateDateNote(verdict, rate), details: { rate, invoiceDate: doc.invoice_date ?? null, verdict } });
+      } else if (verdict === "unknown") {
+        flags.push({ code: "unusual_gst_rate", severity: "info", field: "gst_rate", itemPosition: i + 1, message: rateDateNote(verdict, rate) });
+      }
     }
     if (rate === null || it.taxable_amount === null) {
       allRated = false;
