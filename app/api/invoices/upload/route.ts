@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { json } from "@/lib/api/json";
+import { readFormDataCapped } from "@/lib/api/body";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getPrimaryMembership } from "@/lib/auth/session";
@@ -28,12 +29,10 @@ export async function POST(request: Request) {
     return json({ error: `File is too large. The maximum is ${MAX_UPLOAD_MB} MB.` }, 413);
   }
 
-  let form: FormData;
-  try {
-    form = await request.formData();
-  } catch {
-    return json({ error: "Invalid upload." }, 400);
-  }
+  // Counts the bytes as they arrive, so the cap also holds when there is no Content-Length (chunked upload).
+  const parsed = await readFormDataCapped(request, MAX_UPLOAD_BYTES + 64 * 1024);
+  if (!parsed.ok) return json({ error: parsed.status === 413 ? `File is too large. The maximum is ${MAX_UPLOAD_MB} MB.` : parsed.message }, parsed.status);
+  const form = parsed.form;
   const file = form.get("file");
   if (!(file instanceof File)) return json({ error: "No file was provided." }, 400);
 
