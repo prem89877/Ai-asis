@@ -6,7 +6,8 @@ import Link from "next/link";
 import { LogOut } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { signOutAction } from "@/lib/auth/actions";
-import { MAX_UPLOAD_MB } from "@/lib/invoices/validation";
+import { MAX_UPLOAD_BYTES, MAX_UPLOAD_MB } from "@/lib/invoices/validation";
+import { shrinkImageToFit } from "@/lib/invoices/shrink-image";
 import type { Activity, Stat } from "@/lib/sample-data";
 import type { JobRow, Summary } from "@/lib/review/client-types";
 import type { BillingOverview } from "@/lib/billing/types";
@@ -162,9 +163,12 @@ export function DashboardLive({ displayName, firmName, summary: initialSummary, 
 
     const uploadedIds: string[] = [];
     const errors: string[] = [];
-    for (const file of files) {
-      if (file.size > MAX_UPLOAD_MB * 1024 * 1024) {
-        errors.push(`${file.name}: larger than ${MAX_UPLOAD_MB} MB`);
+    for (const original of files) {
+      // Large phone photos (JPG / PNG) are shrunk in the browser to fit under the cap; PDFs are never changed.
+      // The 64 KB margin keeps the multipart envelope under the server limit.
+      const file = await shrinkImageToFit(original, MAX_UPLOAD_BYTES - 64 * 1024);
+      if (file.size > MAX_UPLOAD_BYTES) {
+        errors.push(`${original.name}: larger than ${MAX_UPLOAD_MB} MB`);
         continue;
       }
       const body = new FormData();
@@ -320,7 +324,7 @@ export function DashboardLive({ displayName, firmName, summary: initialSummary, 
               onPolled={reloadSummary}
             />
             <div className="space-y-6">
-              <UploadDropzone onFilesSelected={uploadFiles} busy={uploading || extracting} hint={`PDF, JPG or PNG, up to ${MAX_UPLOAD_MB} MB each${billing ? `, ${billing.plan.batch_max_files} files per upload on your ${billing.plan.name} plan` : ""}. AI-extracted data must be reviewed before use.`} />
+              <UploadDropzone onFilesSelected={uploadFiles} busy={uploading || extracting} hint={`PDF up to ${MAX_UPLOAD_MB} MB; JPG or PNG photos are reduced automatically${billing ? `, ${billing.plan.batch_max_files} files per upload on your ${billing.plan.name} plan` : ""}. AI-extracted data must be reviewed before use.`} />
               <UsagePanel summary={summary} billing={billing} jobs={jobs} />
               <RecentActivity items={activity} />
             </div>
