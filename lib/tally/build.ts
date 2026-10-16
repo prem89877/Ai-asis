@@ -10,6 +10,7 @@
 // What it does NOT do: it never connects to Tally, never posts anything, never creates ledgers or stock items, and does
 // not carry GST registration details or bill-wise allocations. Party and tax ledgers must already exist in Tally under
 // exactly the names configured here, otherwise Tally rejects the voucher.
+import { toPaise as roundToPaise } from "../extraction/normalize.ts";
 import type { ExportInvoice } from "../export/columns.ts";
 import { dedupeKey } from "../integrations/mapping.ts";
 
@@ -73,7 +74,7 @@ export interface TallyVoucher {
 }
 export interface TallySkip { invoiceId: string; invoiceNumber: string | null; reason: string }
 
-const toPaise = (n: number | null): number => (n === null || n === undefined ? 0 : Math.round(Number(n) * 100));
+const toPaise = (n: number | null): number => (n === null || n === undefined ? 0 : roundToPaise(Number(n)));
 const ROUND_OFF_LIMIT_PAISE = 100; // up to INR 1.00 is treated as round-off; more means the invoice does not add up
 
 export function buildVouchers(invoices: ExportInvoice[], config: TallyConfig): { vouchers: TallyVoucher[]; skipped: TallySkip[] } {
