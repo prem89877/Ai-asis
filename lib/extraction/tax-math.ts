@@ -54,7 +54,11 @@ export interface TaxHeadCheck {
 
 const MAX_POSITIONS = 50;
 const IMPLAUSIBLE_PERCENT = 20; // TCS / TDS above 20 % of the taxable value is never a real withholding rate
-const CESS_MAX_TIMES_TAXABLE = 5; // the highest real cess rates are around 200 % (tobacco); 5x is a safe misread detector
+const CESS_MAX_TIMES_TAXABLE = 5; // the highest ad-valorem cess rates are around 200 % (tobacco); 5x is a safe misread detector
+// A cess charged PER UNIT (per 1000 sticks, per kg) has no fixed relation to the taxable value and can pass 5x of it on cheap goods.
+// Lines with these HSN codes are never judged by the ratio: tobacco (2401-2404) and pan masala (210690). Extend the list if needed.
+const SPECIFIC_CESS_HSN = ["2401", "2402", "2403", "2404", "210690"];
+const hasSpecificCessLine = (items: StoredItem[]) => items.some((it) => typeof it.hsn_code === "string" && SPECIFIC_CESS_HSN.some((h) => (it.hsn_code as string).replace(/\D/g, "").startsWith(h)));
 
 export function checkTaxHeads(e: StoredExtracted, items: StoredItem[], tolerancePaise: number): TaxHeadCheck {
   const flags: ReviewFlag[] = [];
@@ -129,7 +133,9 @@ export function checkTaxHeads(e: StoredExtracted, items: StoredItem[], tolerance
   // 4. Cess, TCS and TDS: believable amounts.
   const base = has(e.taxable_amount) ? Math.abs(toPaise(e.taxable_amount)) : null;
   if (base !== null && base > 0) {
-    if (has(e.cess_amount) && Math.abs(p(e.cess_amount)) > base * CESS_MAX_TIMES_TAXABLE) {
+    // Not implausible when the lines carry the cess themselves (line tax = GST + cess) or the goods have a per-unit cess.
+    const cessOnLines = items.length > 0 && items.every((it) => has(it.gst_amount)) && removeCessFromLineTaxes(e, items, items.map((it) => p(it.gst_amount)), tol) !== null;
+    if (has(e.cess_amount) && Math.abs(p(e.cess_amount)) > base * CESS_MAX_TIMES_TAXABLE && !cessOnLines && !hasSpecificCessLine(items)) {
       flags.push({
         code: "cess_implausible", severity: "warning", field: "cess",
         message: "The cess is far larger than the taxable value. A digit may have been misread, or another figure was copied into the cess field. Check the original.",

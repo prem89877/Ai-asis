@@ -524,10 +524,14 @@ export function tripleCheckTax(e: StoredExtracted, items: StoredItem[], toleranc
   if (!headerKnown) return { level: "not_checked", methods, disagreeing: [] };
   const header = p(e.cgst_amount) + p(e.sgst_amount) + p(e.utgst_amount) + p(e.igst_amount); // total GST, each head once
   methods.push({ id: "printed_invoice_tax", label: "CGST + SGST + UTGST + IGST printed on the invoice", value: header / 100 });
-  if (items.length > 0 && items.every((it) => has(it.gst_amount))) {
+  // On a foreign-currency invoice the header taxes are in INR while the line amounts are in the invoice currency, so comparing them
+  // directly (or "rate x taxable") reports a difference that is only the exchange rate. checkTaxHeads skips the line checks for the same
+  // reason, so the line-derived methods are left out here too; the invoice is then at most "partial", never falsely "unverified".
+  const foreignLines = isForeign(e.currency, e.exchange_rate);
+  if (!foreignLines && items.length > 0 && items.every((it) => has(it.gst_amount))) {
     methods.push({ id: "printed_line_tax", label: "Sum of the tax printed on each line", value: items.reduce((a, it) => a + p(it.gst_amount), 0) / 100 });
   }
-  if (items.length > 0 && items.every((it) => has(it.gst_rate) && has(it.taxable_amount))) {
+  if (!foreignLines && items.length > 0 && items.every((it) => has(it.gst_rate) && has(it.taxable_amount))) {
     methods.push({ id: "rate_x_taxable", label: "Taxable value x GST rate, line by line", value: items.reduce((a, it) => a + toPaise(((it.taxable_amount as number) * (it.gst_rate as number)) / 100), 0) / 100 });
   }
   const disagreeing: string[] = [];
