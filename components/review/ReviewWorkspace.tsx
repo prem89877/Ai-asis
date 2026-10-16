@@ -60,6 +60,7 @@ export function ReviewWorkspace({ invoiceId, neighborIds, onNavigate, onClose, o
   const [loadError, setLoadError] = useState<string | null>(null);
   const [header, setHeader] = useState<HeaderDraft | null>(null);
   const [items, setItems] = useState<ItemDraft[]>([]);
+  const [itemSrc, setItemSrc] = useState<(number | null)[]>([]); // original position of each row (null = added here); keeps line labels on the right row
   const [baseline, setBaseline] = useState("");
   const [tab, setTab] = useState<"preview" | "details">("details");
   const [busy, setBusy] = useState<null | "save" | "verify" | "unverify">(null);
@@ -89,6 +90,7 @@ export function ReviewWorkspace({ invoiceId, neighborIds, onNavigate, onClose, o
         });
         setHeader(h);
         setItems(it);
+        setItemSrc(it.map((_, n) => n + 1));
         setBaseline(JSON.stringify({ h, it }));
       }
     } catch {
@@ -149,7 +151,7 @@ export function ReviewWorkspace({ invoiceId, neighborIds, onNavigate, onClose, o
       const h: Record<string, string> = {};
       for (const f of HEADER_FIELDS) if (header[f.column] !== "" || f.kind !== "doctype") h[f.column] = header[f.column];
       body.header = h;
-      if (itemsDirty) body.items = items;
+      if (itemsDirty) { body.items = items; body.itemSources = itemSrc; }
     }
     try {
       const res = await fetch(`/api/invoices/${invoiceId}/review`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -173,8 +175,8 @@ export function ReviewWorkspace({ invoiceId, neighborIds, onNavigate, onClose, o
 
   const setH = (c: HeaderColumn, v: string) => setHeader((h) => (h ? { ...h, [c]: v } : h));
   const setItem = (i: number, c: ItemColumn, v: string) => setItems((list) => list.map((r, n) => (n === i ? { ...r, [c]: v } : r)));
-  const addItem = () => setItems((l) => (l.length >= MAX_ITEMS ? l : [...l, Object.fromEntries(ITEM_FIELDS.map((f) => [f.key, ""])) as ItemDraft]));
-  const delItem = (i: number) => setItems((l) => l.filter((_, n) => n !== i));
+  const addItem = () => { if (items.length >= MAX_ITEMS) return; setItems((l) => [...l, Object.fromEntries(ITEM_FIELDS.map((f) => [f.key, ""])) as ItemDraft]); setItemSrc((s) => [...s, null]); };
+  const delItem = (i: number) => { setItems((l) => l.filter((_, n) => n !== i)); setItemSrc((s) => s.filter((_, n) => n !== i)); };
 
   const verified = data?.invoice.status === "verified";
   const canEdit = !!data?.extracted && ["completed", "needs_review", "verified"].includes(data.invoice.status);
