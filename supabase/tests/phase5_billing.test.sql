@@ -43,7 +43,10 @@ $$;
 create function public._t_finish(p_invoice uuid, p_status text, p_error text default null) returns void language plpgsql security definer set search_path = '' as $$
 declare v_job uuid;
 begin
-  select j.id into v_job from public.processing_jobs j where j.invoice_id = p_invoice order by j.created_at desc, j.id desc limit 1;
+  -- Prefer the ACTIVE (queued / processing) job: inside one test transaction every job has the same created_at (now()), so ordering by
+  -- time alone can pick an old failed job and move it back to 'processing' while the retry job is still active (unique index violation).
+  select j.id into v_job from public.processing_jobs j where j.invoice_id = p_invoice
+   order by (j.status::text in ('queued', 'processing')) desc, j.created_at desc, j.id desc limit 1;
   update public.processing_jobs set status = 'processing', started_at = now() where id = v_job;
   update public.invoices set status = 'processing' where id = p_invoice;
   update public.processing_jobs
