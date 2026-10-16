@@ -124,3 +124,9 @@ test("fixed prompt: tax-head guidance is present, copy-only", () => {
   assert.match(SYSTEM_PROMPT, /TCS and TDS are not tax heads/);
   assert.match(SYSTEM_PROMPT, /cess is its own figure/);
 });
+
+test("cess far above the taxable value is NOT flagged for per-unit cess goods (tobacco / pan masala HSN) or when the lines carry it", () => {
+  const tobacco = run(model({ cess: f(9000), grand_total: f(10180), line_items: [item({ hsn_sac: f("24022090") })] }));
+  assert.ok(!codes(tobacco).includes("cess_implausible"));
+  assert.ok(codes(run(model({ cess: f(9000), grand_total: f(10180), line_items: [item({ hsn_sac: f("61091000") })] }))).includes("cess_implausible"));
+});

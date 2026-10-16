@@ -120,3 +120,18 @@ test("a 12% line on an Oct-2026 invoice is flagged; the same line on a 2025-06 i
   assert.deepEqual(codes(gstChecks(base, [line], OPTS)), []);
   assert.deepEqual(codes(gstChecks({ ...base, invoice_date: "2026-10-11" }, [{ ...line, gst_rate: 17, gst_amount: 170 }], OPTS)).filter((c) => c === "unusual_gst_rate"), ["unusual_gst_rate"]);
 });
+
+test("foreign-currency invoice: INR header tax vs line amounts in the invoice currency is not reported as 'unverified'", () => {
+  const n = norm(model({
+    currency: f("USD"), exchange_rate: f(83), place_of_supply: f("Maharashtra (27) - SEZ"),
+    taxable_value: f(83000), cgst: missing(), sgst: missing(), igst: f(14940), grand_total: f(1180),
+    line_items: [item({ taxable_value: f(1000), gst_rate: f(18), tax_amount: f(180), line_total: f(1180) })],
+  }));
+  const v = tripleCheckTax(n.extracted, n.items, 100);
+  assert.deepEqual(v.disagreeing, []);
+  assert.notEqual(v.level, "unverified");
+  assert.ok(!v.methods.some((m) => m.id === "printed_line_tax" || m.id === "rate_x_taxable")); // never compared across currencies
+  // the same invoice in INR still compares the lines (and here they agree)
+  const inr = norm(model());
+  assert.ok(tripleCheckTax(inr.extracted, inr.items, 100).methods.some((m) => m.id === "rate_x_taxable"));
+});
