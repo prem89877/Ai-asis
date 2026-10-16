@@ -76,3 +76,60 @@ test("ledger config validation", () => {
   assert.equal(validateTallyConfig([]).ok, false);
   assert.equal(xmlEscape("a\u0000b"), "ab");
 });
+
+// ---- consistency with the review engine ----
+test("round-off up to INR 2.00 (the engine's window) is booked to Round Off, not skipped; more than that is still skipped", () => {
+  const { vouchers, skipped } = buildVouchers([
+    inv({ id: "a", invoice_number: "RA", total_amount: 1181.9 }), // +1.90
+    inv({ id: "b", invoice_number: "RB", total_amount: 1178.1 }), // -1.90
+    inv({ id: "c", invoice_number: "RC", total_amount: 1182.5 }), // +2.50: not round-off
+  ], C);
+  assert.equal(vouchers.length, 2);
+  for (const v of vouchers) assert.equal(voucherBalance(v), 0);
+  assert.equal(skipped.length, 1);
+  assert.equal(skipped[0].invoiceNumber, "RC");
+});
+test("round-off window never exceeds 1% of the value: INR 1.50 on a INR 50 bill is a misread, not round-off", () => {
+  const { vouchers, skipped } = buildVouchers([inv({ taxable_amount: 42.37, cgst_amount: 3.81, sgst_amount: 3.81, total_amount: 51.5 })], C);
+  assert.equal(vouchers.length, 0);
+  assert.equal(skipped.length, 1);
+});
+test("TCS is booked to its own ledger inside the total", () => {
+  const { vouchers, skipped } = buildVouchers([inv({ tcs_amount: 10, total_amount: 1190 })], C);
+  assert.equal(skipped.length, 0);
+  const v = vouchers[0];
+  assert.equal(voucherBalance(v), 0);
+  assert.deepEqual(v.entries.find((e) => e.ledger === C.tcsLedger), { ledger: C.tcsLedger, side: "Dr", paise: 1000, isParty: false });
+  // a TCS printed with a minus sign is still collected ON TOP of the invoice
+  assert.equal(buildVouchers([inv({ tcs_amount: -10, total_amount: 1190 })], C).vouchers.length, 1);
+});
+test("pre-tax charges kept outside the taxable value get their own ledger; charges already inside it are not booked twice", () => {
+  const outside = buildVouchers([inv({ pre_tax_charges: 100, total_amount: 1280 })], C); // 1000 + 100 + 180 (tax computed on 1100 elsewhere is irrelevant here)
+  assert.equal(outside.skipped.length, 0);
+  assert.equal(voucherBalance(outside.vouchers[0]), 0);
+  assert.equal(outside.vouchers[0].entries.find((e) => e.ledger === C.chargesLedger).paise, 10000);
+  const inside = buildVouchers([inv({ pre_tax_charges: 100, total_amount: 1180 })], C); // already inside taxable: total balances without it
+  assert.equal(inside.skipped.length, 0);
+  assert.equal(inside.vouchers[0].entries.some((e) => e.ledger === C.chargesLedger), false);
+  // charges and a discount after tax together
+  const both = buildVouchers([inv({ pre_tax_charges: 100, discount_amount: 30, total_amount: 1250 })], C);
+  assert.equal(both.skipped.length, 0);
+  assert.equal(voucherBalance(both.vouchers[0]), 0);
+});
+test("currency is compared case-insensitively ('inr', ' Inr ' are rupees)", () => {
+  const { vouchers, skipped } = buildVouchers([inv({ id: "a", invoice_number: "CA", currency: "inr" }), inv({ id: "b", invoice_number: "CB", currency: " Inr " }), inv({ id: "c", invoice_number: "CC", currency: "usd" })], C);
+  assert.equal(vouchers.length, 2);
+  assert.equal(skipped.length, 1);
+  assert.match(skipped[0].reason, /usd/i);
+});
+test("duplicates: '12/3' and '1/23' are different invoices; a misread GSTIN does not hide a real duplicate", () => {
+  const two = buildVouchers([inv({ id: "a", invoice_number: "12/3" }), inv({ id: "b", invoice_number: "1/23" })], C);
+  assert.equal(two.vouchers.length, 2);
+  const dup = buildVouchers([inv({ id: "a" }), inv({ id: "b", vendor_gstin: "27AAPFU0939F1ZW" })], C);
+  assert.equal(dup.vouchers.length, 1);
+  assert.match(dup.skipped[0].reason, /Duplicate/);
+});
+test("new ledger names are validated like the others", () => {
+  assert.equal(validateTallyConfig({ tcsLedger: "TCS Receivable", chargesLedger: "Freight and Packing" }).ok, true);
+  assert.equal(validateTallyConfig({ chargesLedger: "Freight & Packing" }).ok, false);
+});

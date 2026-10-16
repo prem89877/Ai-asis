@@ -229,7 +229,7 @@ test("invoice number: replaced only when an earlier independent reading already 
   const witness = model({ invoice_number: f("INV-001") });
   const withWitness = run(m, answer, { readings: [m, witness] });
   assert.equal(withWitness.out.extracted.invoice_number, "INV-001");
-  assert.equal(withWitness.out.extracted.invoice_number_norm, "INV001");
+  assert.equal(withWitness.out.extracted.invoice_number_norm, "INV-001");
 });
 
 test("repeated line items: identical rows are told apart by position, only the row that was re-read changes", () => {

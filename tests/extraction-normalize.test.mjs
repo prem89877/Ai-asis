@@ -25,7 +25,10 @@ test("date, HSN and invoice number normalizers", () => {
   assert.equal(normalizeIsoDate("15/09/2026"), null);
   assert.equal(normalizeHsn("8471 30"), "847130");
   assert.equal(normalizeHsn("84"), null);
-  assert.equal(normalizeInvoiceNumber("inv/001"), "INV001");
+  assert.equal(normalizeInvoiceNumber("inv/001"), "INV-001");
+  assert.equal(normalizeInvoiceNumber("INV-001"), normalizeInvoiceNumber("INV 001")); // case, space and punctuation style do not matter
+  assert.equal(normalizeInvoiceNumber("  //INV--001// "), "INV-001");
+  assert.notEqual(normalizeInvoiceNumber("12/3"), normalizeInvoiceNumber("1/23")); // where the separator sits does matter
   assert.equal(normalizeInvoiceNumber("---"), null);
   assert.equal(toPaise(1234.56), 123456);
 });

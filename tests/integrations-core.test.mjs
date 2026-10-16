@@ -103,6 +103,37 @@ test("timeout aborts the request and is reported as timeout", async () => {
   const hang = (_u, init) => new Promise((_r, rej) => init.signal.addEventListener("abort", () => rej(Object.assign(new Error("aborted"), { name: "AbortError" }))));
   await assert.rejects(providerFetch("https://x", {}, { idempotent: false, timeoutMs: 20, fetchImpl: hang }), (e) => e.code === "timeout");
 });
+test("timeout also covers the response BODY: headers arrive, body hangs -> aborted, status still decides", async () => {
+  const slowBody = (_u, init) => Promise.resolve({
+    status: 200, headers: new Headers(),
+    text: () => new Promise((_r, rej) => init.signal.addEventListener("abort", () => rej(Object.assign(new Error("aborted"), { name: "AbortError" })))),
+  });
+  const t0 = Date.now();
+  const r = await providerFetch("https://x", {}, { idempotent: false, timeoutMs: 30, fetchImpl: slowBody });
+  assert.equal(r.status, 200); // the write was accepted; only the body was lost (the sync recovers through the AI Asis ID column)
+  assert.equal(r.json, null);
+  assert.ok(Date.now() - t0 < 1000);
+  await assert.rejects(providerFetch("https://x", {}, { idempotent: true, maxAttempts: 1, timeoutMs: 30, fetchImpl: async (u, i) => ({ ...(await slowBody(u, i)), status: 500 }) }), (e) => e.code === "server_error");
+});
+test("deadline: a rate-limit wait that would not fit is not taken; the call fails cleanly instead of running past the route limit", async () => {
+  const waits = [];
+  let n = 0;
+  await assert.rejects(
+    providerFetch("https://x", { method: "POST" }, { idempotent: false, deadlineAt: Date.now() + 5_000, sleep: async (ms) => waits.push(ms), fetchImpl: async () => (n++, res(429, {}, { "retry-after": "30" })) }),
+    (e) => e.code === "rate_limited",
+  );
+  assert.equal(n, 1);
+  assert.deepEqual(waits, []);
+  // a short wait that fits is still taken
+  n = 0;
+  const ok = await providerFetch("https://x", {}, { idempotent: true, deadlineAt: Date.now() + 20_000, sleep: async (ms) => waits.push(ms), fetchImpl: async () => (++n === 1 ? res(429, {}, { "retry-after": "2" }) : res(200, { ok: 1 })) });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(waits, [2000]);
+  // deadline already passed: no request at all
+  let called = 0;
+  await assert.rejects(providerFetch("https://x", {}, { idempotent: true, deadlineAt: Date.now() - 1, fetchImpl: async () => { called++; return res(200); } }), (e) => e.code === "timeout");
+  assert.equal(called, 0);
+});
 test("user messages never leak internals", () => {
   assert.match(userMessage(new IntegrationError("auth_expired")).message, /Reconnect/);
   assert.equal(userMessage(new Error("secret db password")).code, "unknown");
@@ -159,7 +190,13 @@ test("dedupe key: same supplier + number + FY matches, other FY or supplier does
   assert.equal(a, b);
   assert.notEqual(a, dedupeKey(inv({ invoice_date: "2027-05-01" })));
   assert.equal(dedupeKey(inv({ invoice_date: "2027-02-01" })), dedupeKey(inv({ invoice_date: "2026-04-01" }))); // same FY 2026-27
-  assert.notEqual(a, dedupeKey(inv({ vendor_gstin: "29AAPFU0939F1ZV" })));
+  // The supplier is the NAME (GSTIN only when there is no name): a misread GSTIN no longer hides a duplicate...
+  assert.equal(a, dedupeKey(inv({ vendor_gstin: "29AAPFU0939F1ZV" })));
+  assert.notEqual(a, dedupeKey(inv({ vendor_name: "Other Traders" })));
+  assert.ok(dedupeKey(inv({ vendor_name: null, vendor_gstin: "27AAPFU0939F1ZV" })).startsWith("27AAPFU0939F1ZV|"));
+  // ...and "12/3" and "1/23" are different invoices (they used to collapse into "123").
+  assert.notEqual(dedupeKey(inv({ invoice_number: "12/3" })), dedupeKey(inv({ invoice_number: "1/23" })));
+  assert.equal(dedupeKey(inv({ invoice_number: "inv/12" })), dedupeKey(inv({ invoice_number: "INV 12" })));
   assert.equal(dedupeKey(inv({ invoice_number: null })), null);
   assert.ok(dedupeKey(inv({ vendor_gstin: null })).startsWith("ACMETRADERS|"));
 });

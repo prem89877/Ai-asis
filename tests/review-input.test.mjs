@@ -81,7 +81,7 @@ test("applyReview: only changed fields are touched, first original is kept, stat
   assert.equal(out.corrected.vendor_name.original, "Acme Trader");
   assert.equal(out.fieldStatus.supplier_name.confidence, 1);
   assert.equal(out.fieldStatus.grand_total.confidence, 0.5); // unchanged field keeps the model's own confidence
-  assert.equal(out.invoiceNumberNorm, "INV9A");
+  assert.equal(out.invoiceNumberNorm, "INV-9-A");
   // second edit keeps the first original
   const cur2 = { ...cur, header: out.header, corrected_fields: out.corrected };
   const out2 = applyReview(cur2, parseReviewInput({ ...base, header: { vendor_name: "Acme Traders Pvt" } }).value, "user-1", "later");
