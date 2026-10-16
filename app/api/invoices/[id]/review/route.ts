@@ -10,7 +10,7 @@ import type { FieldMeta, ReviewFlag, StoredItem } from "@/lib/extraction/types";
 import { applyReview } from "@/lib/review/apply";
 import { HEADER_COLUMNS, ITEM_FIELDS, NUMERIC_HEADER_COLUMNS } from "@/lib/review/fields";
 import type { HeaderValues } from "@/lib/review/fields";
-import { computeReviewFlags, hasOpenFlags, toStoredExtracted } from "@/lib/review/flags";
+import { computeReviewFlags, hasOpenFlags, refreshComputedRoundOff, toStoredExtracted } from "@/lib/review/flags";
 import { parseReviewInput } from "@/lib/review/input";
 import type { CorrectedField, CurrentRecord, StoredItemRow } from "@/lib/review/types";
 
@@ -85,8 +85,9 @@ export async function PUT(request: Request, { params }: { params: { id: string }
     ack_no: (row.ack_no as string | null) ?? null,
     eway_bill_no: (row.eway_bill_no as string | null) ?? null,
   };
-  // Per-line labels (discount type, IGST vs CGST/SGST) are not editable here. They stay with their line while the
-  // number of lines is unchanged; if lines were added or removed the labels cannot be matched and are dropped.
+  // Per-line labels (discount type, IGST vs CGST/SGST) are not editable here. They follow their ROW, not its index: the page says
+  // which original position each row came from (itemSources). A row added on screen has no label. An older page that does not send
+  // itemSources keeps a label only when the row at that index is still the same line (same description, taxable value and rate).
   const itemLabels = ((itemsRes.data ?? []) as Record<string, unknown>[]).map((r) => ({
     discount_type: (r.discount_type as StoredItem["discount_type"]) ?? null,
     applied_tax_type: (r.applied_tax_type as StoredItem["applied_tax_type"]) ?? null,
@@ -108,10 +109,24 @@ export async function PUT(request: Request, { params }: { params: { id: string }
   const applied = applyReview(current, input, g.user.id, nowIso);
   const finalItems = applied.items ?? currentItems;
 
-  const keepLabels = applied.items === null || applied.items.length === itemLabels.length;
-  const labelFor = (idx: number) => (keepLabels ? itemLabels[idx] ?? { discount_type: null, applied_tax_type: null } : { discount_type: null, applied_tax_type: null });
+  const NO_LABEL = { discount_type: null, applied_tax_type: null } as const;
+  const usedSources = new Set<number>();
+  const labelFor = (idx: number) => {
+    if (applied.items === null) return itemLabels[idx] ?? NO_LABEL; // lines untouched: same rows, same order
+    const src = input.itemSources ? input.itemSources[idx] : null;
+    if (input.itemSources) {
+      if (src === null || src === undefined || usedSources.has(src) || !itemLabels[src - 1]) return NO_LABEL;
+      usedSources.add(src);
+      return itemLabels[src - 1];
+    }
+    const before = currentItems[idx];
+    const after = applied.items[idx];
+    const same = before !== undefined && itemLabels[idx] !== undefined && before.description === after.description && before.taxable_amount === after.taxable_amount && before.gst_rate === after.gst_rate;
+    return same ? itemLabels[idx] : NO_LABEL;
+  };
+  const labels = finalItems.map((_, idx) => labelFor(idx)); // computed once: a source position can be used by one row only
   const storedItems: StoredItem[] = finalItems.map((it, idx) => ({
-    ...labelFor(idx),
+    ...labels[idx],
     description: it.description as string | null,
     hsn_code: it.hsn_code as string | null,
     quantity: it.quantity as number | null,
@@ -126,6 +141,10 @@ export async function PUT(request: Request, { params }: { params: { id: string }
   }));
 
   const cfg = getCheckConfig();
+  // A computed round-off belongs to the old values: recompute it from the current ones before anything is validated or saved.
+  const refreshed = refreshComputedRoundOff(applied.header, applied.fieldStatus, storedItems, cfg, extras);
+  applied.header = refreshed.header;
+  applied.fieldStatus = refreshed.fieldStatus;
   const flags: ReviewFlag[] = computeReviewFlags(applied.header, applied.fieldStatus, storedItems, cfg, new Date(), extras);
 
   // Duplicate candidates are re-checked against the corrected values.
@@ -161,7 +180,7 @@ export async function PUT(request: Request, { params }: { params: { id: string }
     p_header: headerPayload,
     p_field_status: applied.fieldStatus,
     p_corrected: applied.corrected,
-    p_items: applied.items ? applied.items.map((it, idx) => ({ ...it, ...labelFor(idx) })) : null,
+    p_items: applied.items ? applied.items.map((it, idx) => ({ ...it, ...labels[idx] })) : null,
     p_flags: flags,
     p_new_status: hasOpenFlags(flags) ? "needs_review" : "completed",
     p_changes: applied.changes,
