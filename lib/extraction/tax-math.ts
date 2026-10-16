@@ -4,7 +4,7 @@
 //
 //   check 1  CGST and SGST / UTGST are always charged at the same amount on one invoice
 //   check 2  only one of CGST / SGST printed (the other one was probably missed)
-//   check 3  tax printed on a line vs taxable x rate of that line (line by line)
+//   check 3  tax printed on a line vs taxable x rate of that line (line by line; ONE flag per line: item_tax_rate_mismatch)
 //   check 4  Cess, TCS and TDS must be believable amounts (a misread digit is the usual cause)
 //   check 5  diagnoseTotalMismatch(): which single head, if left out / counted twice, explains a wrong total
 //
@@ -110,11 +110,14 @@ export function checkTaxHeads(e: StoredExtracted, items: StoredItem[], tolerance
       if (gstPart !== null && Math.abs(gstPart - expected) <= allowed) return; // rate is the GST rate, the printed tax also holds the cess
       bad.push({ position: i + 1, expected: expected / 100, extracted: got / 100 });
     });
-    if (bad.length > 0) {
+    // One flag per line, with itemPosition, so the review screen shows it next to that line. This is the ONLY line-tax verdict:
+    // review/gst.ts no longer raises its own (stricter) item_tax_rate_mismatch, so one line can never get two different answers.
+    for (const b of bad.slice(0, MAX_POSITIONS)) {
+      const it = items[b.position - 1];
       flags.push({
-        code: "line_tax_rate_mismatch", severity: "warning",
-        message: `${bad.length === 1 ? "Item" : "Items"} ${bad.slice(0, 10).map((b) => b.position).join(", ")}${bad.length > 10 ? " ..." : ""}: the printed tax does not match taxable value x GST rate. The rate or the tax amount may have been misread. Check the original.`,
-        details: { lines: bad.slice(0, MAX_POSITIONS) },
+        code: "item_tax_rate_mismatch", severity: "warning", field: "tax_amount", itemPosition: b.position,
+        message: "The item's GST amount does not match its taxable value at the stated rate. The rate or the tax amount may have been misread. Check the original.",
+        details: { expected: b.expected, extracted: b.extracted, rate: it.gst_rate },
       });
     }
   }
@@ -159,37 +162,54 @@ export interface TotalParts {
   lineImpliedTax: number | null; // sum of taxable x rate over the lines, paise
 }
 
-export interface Diagnosis { code: string; message: string }
+export interface Diagnosis {
+  code: string;
+  message: string;
+  // Other codes that explain the printed total by exactly the same amount (for example CGST = SGST, so "no SGST" and "no CGST"
+  // cannot be told apart from the amounts alone). Present only when the explanation is NOT unique.
+  ambiguousWith?: string[];
+}
 
 // Which single explanation reproduces the printed total? Only explanations within INR 2.00 are returned, best first.
+// Explanations that move the total by the same amount are one finding, not several competing "most likely" ones: they are returned
+// together and each carries the codes of the others in `ambiguousWith`.
 export function diagnoseTotalMismatch(t: TotalParts, tolerancePaise = 200): Diagnosis[] {
   const diff = t.actual - t.expectedTotal;
   const tries: { delta: number; code: string; message: string }[] = [];
   const add = (delta: number, code: string, message: string) => { if (delta !== 0) tries.push({ delta, code, message }); };
+  const ut = t.utgst ?? 0; // utgst is optional (most invoices have none); a missing figure is 0
   add(-t.tds, "total_is_after_tds", "The printed total looks like the amount AFTER TDS. The grand total is before TDS, the net payable is after it.");
   add(-t.tcs, "total_without_tcs", "The printed total does not seem to include TCS, or the TCS amount was misread.");
   add(-t.cess, "total_without_cess", "The printed total does not seem to include the cess, or the cess amount was misread.");
   add(-t.sgst, "total_without_sgst", "The printed total looks like it has no SGST / UTGST in it. The SGST / UTGST amount may have been misread.");
-  const ut = t.utgst ?? 0;
   add(-ut, "total_without_utgst", "The printed total looks like it has no UTGST in it. The UTGST amount may be missing or was merged into the SGST field.");
   add(ut, "utgst_counted_twice", "The UTGST seems to be counted twice, or the UTGST figure was also copied into the SGST field.");
-  add(-(t.sgst + ut), "total_without_state_tax", "The printed total looks like it has neither SGST nor UTGST in it.");
+  // Without a UTGST figure, "neither SGST nor UTGST" is the same finding as "no SGST": it is only a separate explanation when UTGST exists.
+  if (ut !== 0) add(-(t.sgst + ut), "total_without_state_tax", "The printed total looks like it has neither SGST nor UTGST in it.");
   add(-t.cgst, "total_without_cgst", "The printed total looks like it has no CGST in it. The CGST amount may have been misread.");
   add(-t.igst, "total_without_igst", "The printed total looks like it has no IGST in it. The IGST amount may have been misread.");
-  // Printed total higher than the read heads by exactly the state tax: a separate UTGST line was probably printed but not read.
-  if (t.utgst === 0) add(t.sgst, "utgst_not_read", "The printed total is higher by exactly the SGST amount. A separate UTGST (Union Territory GST) figure may be printed on the invoice but was not read.");
   add(t.sgst, "sgst_counted_twice", "The SGST / UTGST seems to be counted twice, or the SGST figure was copied into another field.");
   add(t.cgst, "cgst_counted_twice", "The CGST seems to be counted twice, or the CGST figure was copied into another field.");
+  // Printed total higher than the read heads by exactly the state tax: a separate UTGST line was probably printed but not read.
+  // (utgst is optional, so "not read" means no UTGST figure at all, null or 0.)
+  if (ut === 0) add(t.sgst, "utgst_not_read", "The printed total is higher by exactly the SGST amount. A separate UTGST (Union Territory GST) figure may be printed on the invoice but was not read.");
   add(t.cess, "cess_counted_twice", "The cess seems to be counted twice, or it was also copied into another field.");
-  add(-(t.cgst + t.sgst), "total_without_cgst_sgst", "The printed total looks like it has neither CGST nor SGST / UTGST in it.");
-  add(-(t.tcs + t.tds), "total_without_tcs_after_tds", "The printed total looks like it is after TDS and without TCS.");
+  if (t.cgst !== 0 && t.sgst !== 0) add(-(t.cgst + t.sgst), "total_without_cgst_sgst", "The printed total looks like it has neither CGST nor SGST / UTGST in it.");
+  if (t.tds !== 0 && t.tcs !== 0) add(-(t.tcs + t.tds), "total_without_tcs_after_tds", "The printed total looks like it is after TDS and without TCS.");
   if (t.discount !== null) add(-t.discount, "discount_deducted_twice", "The discount seems to be deducted a second time in the printed total.");
   if (t.charges !== null) add(t.charges, "pre_tax_charges_missing", "The printed total seems to include freight / packing charges that are not in the taxable value.");
-  // Sorted by how close each explanation lands, so the best one comes first.
-  return tries
+  // Sorted by how close each explanation lands, so the best one comes first (equal gaps keep the order above).
+  const near = tries
     .map((x) => ({ ...x, gap: Math.abs(diff - x.delta) }))
     .filter((x) => x.gap <= tolerancePaise)
-    .sort((a, b) => a.gap - b.gap)
-    .slice(0, 3)
-    .map(({ code, message }) => ({ code, message }));
+    .sort((a, b) => a.gap - b.gap);
+  const groups: typeof near[] = [];
+  for (const x of near) {
+    const g = groups.find((grp) => grp[0].delta === x.delta);
+    if (g) g.push(x); else groups.push([x]);
+  }
+  return groups.slice(0, 3).flatMap((g) => g.map((x): Diagnosis => ({
+    code: x.code, message: x.message,
+    ...(g.length > 1 ? { ambiguousWith: g.filter((y) => y !== x).map((y) => y.code) } : {}),
+  })));
 }

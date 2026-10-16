@@ -331,10 +331,14 @@ export function validateInvoiceTotals(e: StoredExtracted, items: StoredItem[], o
     const taxDisagrees = lineImplied !== null && foreignRate === null && Math.abs(Math.abs(lineImplied) - headTax) > tol + items.length;
     const netPrinted = has(e.net_payable_amount) ? toPaise(e.net_payable_amount) : null;
     const money = (v: number) => `INR ${(v / 100).toFixed(2)}`;
-    const reason = causes.length > 0 ? causes[0].message : "The printed total does not equal taxable value + CGST + SGST + UTGST + IGST + cess (+ TCS, - printed discount) and no single tax head explains the gap.";
+    // Several causes can move the total by the same amount (CGST = SGST: "no CGST" and "no SGST" are the same gap). Then none of them is
+    // "most likely": all are listed and the reviewer decides from the original. A single cause is still called the most likely one.
+    const tied = causes.length > 0 ? causes.filter((c) => c.code === causes[0].code || (causes[0].ambiguousWith ?? []).includes(c.code)) : [];
+    const causeText = tied.length === 0 ? "" : tied.length === 1 ? `Most likely: ${tied[0].message}` : `The same amount fits more than one cause, so the invoice alone cannot tell which: ${tied.map((c, i) => `(${i + 1}) ${c.message}`).join(" ")}`;
+    const reason = causes.length > 0 ? causeText : "The printed total does not equal taxable value + CGST + SGST + UTGST + IGST + cess (+ TCS, - printed discount) and no single tax head explains the gap.";
     flags.push({
       code: "arithmetic_total_mismatch", severity: "error", field: "grand_total",
-      message: `Taxable value plus taxes (plus TCS, less TDS where printed) does not equal the grand total or the net payable. Expected ${money(tier1(base0))}, found ${money(actual)} (difference ${money(actual - tier1(base0))}).${causes.length > 0 ? ` Most likely: ${causes[0].message}` : ""}`,
+      message: `Taxable value plus taxes (plus TCS, less TDS where printed) does not equal the grand total or the net payable. Expected ${money(tier1(base0))}, found ${money(actual)} (difference ${money(actual - tier1(base0))}).${causeText ? ` ${causeText}` : ""}`,
       details: {
         field: "grand_total", observed: actual / 100, reason, // expected / extracted / difference below, per component in `components`
         difference: (actual - tier1(base0)) / 100,
@@ -628,7 +632,18 @@ export function validateInvoice(data: InvoiceData, opts: EngineOptions): Invoice
     if (!verification.disagreeing.includes("component_heads")) verification.disagreeing.push("component_heads");
   }
 
-  const flags: ReviewFlag[] = [...lineFlags, ...totals.flags, ...alloc.flags, ...componentFlags, ...heads.flags, ...neg.flags, ...meta]; // the cross-check verdict is kept in the summary, not as a flag, so clean invoices stay flag-free
+  // CGST != SGST (+ UTGST) is the same problem as a CGST / SGST / UTGST head that disagrees with the lines. When the more specific head
+  // finding (tax_allocation_mismatch / tax_component_mismatch, with expected / observed per head) exists, the generic one is dropped.
+  const STATE_HEAD_FIELDS = new Set(["cgst", "sgst", "utgst", "utgst_amount"]);
+  const STATE_HEAD_NAMES = new Set(["CGST", "SGST", "UTGST"]);
+  const headFindings = [...alloc.flags, ...componentFlags].filter((f) => f.code === "tax_allocation_mismatch" || f.code === "tax_component_mismatch");
+  const coversStateHeads = headFindings.some((f) => {
+    const d = (f.details ?? {}) as { mismatchedHeads?: string[]; components?: { field?: string }[] };
+    return (f.field !== undefined && STATE_HEAD_FIELDS.has(f.field)) || (d.mismatchedHeads ?? []).some((h) => STATE_HEAD_NAMES.has(h)) || (d.components ?? []).some((c) => c.field !== undefined && STATE_HEAD_FIELDS.has(c.field));
+  });
+  const headFlags = coversStateHeads ? heads.flags.filter((f) => f.code !== "cgst_sgst_unequal") : heads.flags;
+
+  const flags: ReviewFlag[] = [...lineFlags, ...totals.flags, ...alloc.flags, ...componentFlags, ...headFlags, ...neg.flags, ...meta]; // the cross-check verdict is kept in the summary, not as a flag, so clean invoices stay flag-free
   // The tax cross-check above only compares three ways of adding up the TAX. It must never read "verified" while another financial
   // check of the same invoice failed: a wrong grand total, a wrong tax head or a wrong line must also downgrade it, whatever
   // confidence the model reported. (Before this, an invoice with a 1,500 total instead of 1,180 still showed level "verified".)
