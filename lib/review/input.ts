@@ -13,6 +13,9 @@ export interface ReviewInput {
   action: ReviewAction;
   header: HeaderPatch;
   items: ItemInput[] | null;
+  // For every row sent in `items`: the 1-based position it had when the page was loaded, or null for a row added on screen. The line
+  // labels (discount type, IGST vs CGST/SGST) follow the row by this number, not by its index.
+  itemSources: (number | null)[] | null;
   acknowledgeFlags: boolean;
 }
 
@@ -130,7 +133,7 @@ function parseHeaderValue(def: (typeof HEADER_FIELDS)[number], raw: unknown): { 
 
 export function parseReviewInput(body: unknown): ParseResult {
   if (!isRecord(body)) return { ok: false, message: "Invalid request." };
-  const allowedTop = ["expectedUpdatedAt", "action", "header", "items", "acknowledgeFlags"];
+  const allowedTop = ["expectedUpdatedAt", "action", "header", "items", "itemSources", "acknowledgeFlags"];
   for (const k of Object.keys(body)) if (!allowedTop.includes(k)) return { ok: false, message: "Invalid request." };
 
   const expected = body.expectedUpdatedAt;
@@ -194,5 +197,15 @@ export function parseReviewInput(body: unknown): ParseResult {
     }
   }
 
-  return { ok: true, value: { expectedUpdatedAt: expected, action, header, items, acknowledgeFlags: body.acknowledgeFlags === true } };
+  let itemSources: (number | null)[] | null = null;
+  if (body.itemSources !== undefined && body.itemSources !== null) {
+    if (!Array.isArray(body.itemSources) || items === null || body.itemSources.length !== items.length) return { ok: false, message: "Invalid request." };
+    itemSources = [];
+    for (const v of body.itemSources) {
+      if (v !== null && !(typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= MAX_ITEMS)) return { ok: false, message: "Invalid request." };
+      itemSources.push(v);
+    }
+  }
+
+  return { ok: true, value: { expectedUpdatedAt: expected, action, header, items, itemSources, acknowledgeFlags: body.acknowledgeFlags === true } };
 }

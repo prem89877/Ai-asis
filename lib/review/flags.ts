@@ -2,6 +2,7 @@
 // Extraction-time flags are deliberately not carried over: they described the old values.
 // Flags only point at problems. Values are never changed here.
 import { runChecks } from "../extraction/checks.ts";
+import { validateInvoice } from "../extraction/gst-engine.ts";
 import { lineFixFlag } from "../extraction/line-fix.ts";
 import type { FixField } from "../extraction/line-fix.ts";
 import { GSTIN_AUTO_CORRECTED_LABEL, suggestGstinFixes, suggestionText } from "../extraction/gstin.ts";
@@ -135,4 +136,21 @@ export function computeReviewFlags(h: HeaderValues, fieldStatus: Record<string, 
 
 export function hasOpenFlags(flags: ReviewFlag[]): boolean {
   return flags.some((f) => f.severity === "error" || f.severity === "warning");
+}
+
+// A round-off the pipeline computed (field_status source "computed") describes the OLD values. After an edit it is recomputed from the
+// current ones (or removed when nothing is left to absorb), so it never goes stale and is never read as a printed round-off.
+// A round-off printed on the invoice, or typed by a reviewer, is left alone.
+export function refreshComputedRoundOff(h: HeaderValues, fieldStatus: Record<string, FieldMeta>, items: StoredItem[], opts: FlagOptions, extras: Partial<ReviewExtras> = {}): { header: HeaderValues; fieldStatus: Record<string, FieldMeta> } {
+  if (fieldStatus.round_off_amount?.source !== "computed") return { header: h, fieldStatus };
+  const fs = { ...fieldStatus };
+  delete fs.round_off_amount;
+  const header = { ...h, round_off_amount: null } as HeaderValues;
+  const doc = toStoredExtracted(header, fs, { ...extras, round_off_amount: null });
+  const patch = validateInvoice({ extracted: doc, items }, opts).patch.round_off_amount;
+  if (patch !== undefined) {
+    header.round_off_amount = Math.round(patch * 100) / 100;
+    fs.round_off_amount = { state: "value", confidence: 1, source: "computed" };
+  }
+  return { header, fieldStatus: fs };
 }
