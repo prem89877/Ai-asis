@@ -22,8 +22,8 @@ export { validateLineItem } from "./arithmetic.ts";
 // A difference up to this (INR 2.00) is absorbed into round_off_amount and the total check PASSES, but never more than
 // ROUND_OFF_MAX_PERCENT of the invoice value: INR 2.00 is a rounding on a INR 5,000 bill and a misread on a INR 10 bill.
 // The soft tolerance (tolerancePaise, INR 1.00 by default) always still applies, so a tiny invoice is not failed for a rupee.
-export const ROUND_OFF_MAX_PAISE = 200;
-export const ROUND_OFF_MAX_PERCENT = 1;
+import { ROUND_OFF_MAX_PAISE, ROUND_OFF_MAX_PERCENT } from "./round-off.ts";
+export { ROUND_OFF_MAX_PAISE, ROUND_OFF_MAX_PERCENT };
 const MAX_INFERENCE_LINES = 16; // 2^16 line splits are tried when IGST and CGST/SGST are mixed and lines carry no tax type
 
 export interface EngineOptions {

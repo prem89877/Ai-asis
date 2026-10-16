@@ -78,11 +78,9 @@ export function normalizeHsn(raw: string): string | null {
   return /^[0-9]{4,8}$/.test(digits) ? digits : null;
 }
 
-// Used only to find duplicates: "INV-001", "inv/001" and "INV 001" are the same number.
-export function normalizeInvoiceNumber(raw: string): string | null {
-  const n = raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  return n === "" ? null : n;
-}
+// Used only to find duplicates. Defined in invoice-number.ts so the Tally export and the sheet sync use the very same rule.
+export { normalizeInvoiceNumber } from "./invoice-number.ts";
+import { normalizeInvoiceNumber } from "./invoice-number.ts";
 
 export function nameKey(raw: string | null): string | null {
   if (!raw) return null;
