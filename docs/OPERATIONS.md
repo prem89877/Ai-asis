@@ -11,7 +11,7 @@ Honest list of limits, costs, backups, retention and risks as of Phase 6 Part 2.
 - Google Sheets / Excel sync: header row and column mapping must stay unchanged; line items are not synced; retries are manual ("press Sync again"); Google needs app verification for real customers (the `spreadsheets` scope is sensitive).
 - **No payment gateway exists.** Plans can be shown and recorded, but paying, invoices for subscriptions, failed-payment handling and billing webhooks are **not built**. Paid upgrades are blocked in production by design.
 - A person belongs to one primary firm in the UI (the earliest membership). Multi-firm switching is not built.
-- No email notifications, no audit export, no admin console, no scheduled jobs.
+- No email notifications, no audit export, no admin console. The only scheduled job is the extraction worker (section 6); it must be scheduled, otherwise queued invoices run only while a browser tab is open.
 **Technical**
 - Extraction runs inside a request (limit 60 s). Large PDFs or provider slowness end as a failed job that the user retries.
 - Rate limits are counted in the database per firm; there is no IP-level limit or CAPTCHA in front of sign-up and login (rely on Supabase Auth limits and consider Vercel's firewall).
@@ -62,3 +62,8 @@ Retries and failed extractions also cost tokens. Gemini free tier terms differ o
 | Sign-up abuse | cost, storage | email confirmation, upload limits; add CAPTCHA or Vercel firewall rules if abused |
 | No monitoring | silent failures | watch Vercel logs and Supabase logs; add an error tracker and an uptime check before launch |
 | Single developer / single region | slow recovery | document access, keep a second admin on Vercel, Supabase and Google Cloud |
+
+## 6. Background worker, quota and upload cap (migration 018)
+**Worker.** `/api/cron/extraction` fails stale jobs of ALL firms (`reap_stale_extraction_jobs`) and runs queued ones (`list_queued_extraction_jobs`: oldest first, fair between firms, jobs younger than 15 s are left to their browser). Before this, a stale job was cleaned up only when a new claim for the same firm arrived, and queued jobs ran only while the browser kept calling `/extract`. Setup: run `018_quota_worker_upload_cap.sql`, set `CRON_SECRET` (long random value), deploy. `vercel.json` calls the route every minute; Vercel sends the secret as `Authorization: Bearer <secret>`. Any other scheduler works with the same header. Without `CRON_SECRET` the route answers 503. Every job is claimed atomically, so the worker and a browser never run the same invoice twice. Check it with: `curl -H "Authorization: Bearer $CRON_SECRET" https://<your-app>/api/cron/extraction` (answer: `{"ok":true,"reaped":..,"listed":..,"started":..}`). Note: per-minute crons and a 200 s function need a Vercel plan that allows them.
+**Quota.** `stale_timeout` and `internal_error` now consume the quota unit: the Gemini call may have started and been billed. Provider failures (`provider_*`) and `invoice_removed` stay free. A retry of the same invoice in the same period still costs no second unit.
+**Upload cap.** The daily cap is reserved in `upload_events` under a per-firm lock (no check-then-insert race) and counted from that table, so deleting invoices does not lower it. A failed upload (storage error, duplicate file) gives its slot back; an uploaded invoice keeps it. The slot functions are service-role only.
