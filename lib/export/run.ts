@@ -12,7 +12,7 @@ export const CHUNK = 50; // ids per query, keeps URLs short
 const PAGE = 1000; // PostgREST default max rows per request
 
 export const INVOICE_SELECT =
-  "id, original_filename, status, created_at, vendor_name, vendor_gstin, buyer_name, buyer_gstin, invoice_number, invoice_date, place_of_supply, currency, document_type, taxable_amount, discount_amount, cgst_amount, sgst_amount, utgst_amount, igst_amount, cess_amount, tax_total, total_amount, tcs_amount, tds_amount, round_off_amount, net_payable_amount, confidence, review_flags, verified_at";
+  "id, original_filename, status, created_at, vendor_name, vendor_gstin, buyer_name, buyer_gstin, invoice_number, invoice_date, place_of_supply, currency, document_type, taxable_amount, discount_amount, cgst_amount, sgst_amount, utgst_amount, igst_amount, cess_amount, tax_total, total_amount, tcs_amount, tds_amount, round_off_amount, net_payable_amount, pre_tax_charges, confidence, review_flags, verified_at";
 const ITEM_SELECT = "invoice_id, position, description, hsn_code, quantity, unit, unit_price, discount_amount, taxable_amount, gst_rate, gst_amount, line_total";
 
 export interface ExportSpec {

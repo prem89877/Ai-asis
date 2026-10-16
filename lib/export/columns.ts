@@ -40,6 +40,7 @@ export interface ExportInvoice {
   tcs_amount?: number | null;
   tds_amount?: number | null;
   round_off_amount?: number | null;
+  pre_tax_charges?: number | null; // freight / packing printed before tax (used by the Tally export)
   net_payable_amount?: number | null;
   confidence: number | null;
   review_flags: ExportFlag[] | null;
