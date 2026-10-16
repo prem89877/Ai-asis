@@ -372,7 +372,7 @@ test("defaults: every layer is on by default, each has its own off switch, and s
 test("defaults: features that must be off by default are off, and the source layer is idle when its switch or the second reading is off", async () => {
   assert.equal(allowUnpaidUpgrades({}), false);
   assert.equal(allowUnpaidUpgrades({ BILLING_ALLOW_UNPAID_UPGRADES: "" }), false);
-  const route = readFileSync(path.join(ROOT, "app/api/invoices/[id]/extract/route.ts"), "utf8");
+  const route = readFileSync(path.join(ROOT, "lib/extraction/worker.ts"), "utf8"); // the extract route and the cron worker share it
   assert.match(route, /createGstPortalLookup/); // optional: the factory returns null without a key
   for (const cfg of [{ sourceVerify: false }, { verify: false }]) {
     const r = await runScenario("total-wrong-all-layers", { config: cfg });

@@ -75,6 +75,7 @@ test("browser components never import server-only code or read server secrets", 
 // Routes that are intentionally reachable without a normal app session. Each entry needs a reason.
 const PUBLIC_ROUTES = {
   "app/auth/callback/route.ts": "Supabase email/OAuth sign-in landing; code exchange is the authentication; redirect target is sanitised",
+  "app/api/cron/extraction/route.ts": "background worker called by a scheduler, not a user; authenticated by the CRON_SECRET bearer token (constant-time compare), closed when the secret is not set",
 };
 const routeFiles = files.filter((f) => /\/route\.ts$/.test(f) && (rel(f).startsWith("app/api/") || rel(f).startsWith("app/auth/")));
 

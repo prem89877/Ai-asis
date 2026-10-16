@@ -74,15 +74,58 @@ test("upload: batch id must be a UUID and belong to the firm; the daily limit is
   process.env.EXTRACTION_UPLOADS_PER_DAY = "2";
   try {
     const recent = new Date(Date.now() - 3600_000).toISOString();
-    const rows = (n, firm) => Array.from({ length: n }, (_, i) => ({ id: `${firm}${i}`, firm_id: firm, created_at: recent }));
-    h = world({ tables: { invoices: [...rows(1, F1), ...rows(10, F2)] } });
+    const events = (n, firm) => Array.from({ length: n }, (_, i) => ({ id: `${firm}${i}`, firm_id: firm, created_at: recent }));
+    h = world({ adminTables: { upload_events: [...events(1, F1), ...events(10, F2)] } });
     assert.equal((await send(form(minimalPdf()))).status, 201);
-    h = world({ tables: { invoices: rows(2, F1) } });
+    h = world({ adminTables: { upload_events: events(2, F1) } });
     const res = await send(form(minimalPdf()));
     assert.equal(res.status, 429);
     assert.equal(res.headers.get("retry-after"), "3600");
     assert.equal(h.client.storage.uploaded.length, 0);
   } finally { delete process.env.EXTRACTION_UPLOADS_PER_DAY; }
+});
+
+test("upload: the daily cap is counted from reserved slots, so deleted invoices do not lower it", async () => {
+  process.env.EXTRACTION_UPLOADS_PER_DAY = "2";
+  try {
+    const recent = new Date(Date.now() - 3600_000).toISOString();
+    // No invoice rows at all (all were deleted), but two slots were used in the last 24 hours.
+    const h = world({ tables: { invoices: [] }, adminTables: { upload_events: [{ id: "e1", firm_id: F1, created_at: recent }, { id: "e2", firm_id: F1, created_at: recent }] } });
+    assert.equal((await send(form(minimalPdf()))).status, 429);
+    assert.equal(h.client.storage.uploaded.length, 0);
+  } finally { delete process.env.EXTRACTION_UPLOADS_PER_DAY; }
+});
+
+test("upload: parallel uploads cannot pass the cap together (the slot is reserved before the file is stored)", async () => {
+  process.env.EXTRACTION_UPLOADS_PER_DAY = "3";
+  try {
+    const h = world();
+    const results = await Promise.all(Array.from({ length: 8 }, (_, i) => send(form(minimalPdf(i + 1), `p${i}.pdf`))));
+    const statuses = results.map((r) => r.status);
+    assert.equal(statuses.filter((s) => s === 201).length, 3);
+    assert.equal(statuses.filter((s) => s === 429).length, 5);
+    assert.equal(h.client.storage.uploaded.length, 3);
+    assert.equal(h.adminDb.data.upload_events.length, 3);
+  } finally { delete process.env.EXTRACTION_UPLOADS_PER_DAY; }
+});
+
+test("upload: a failed upload (storage error) gives its slot back; a successful one keeps it", async () => {
+  const h = world();
+  h.db.ctl.uploadError = { message: "boom" };
+  assert.equal((await send(form(minimalPdf()))).status, 502);
+  assert.equal((h.adminDb.data.upload_events ?? []).length, 0, "slot released after a failed upload");
+  h.db.ctl.uploadError = null;
+  assert.equal((await send(form(minimalPdf()))).status, 201);
+  assert.equal(h.adminDb.data.upload_events.length, 1);
+});
+
+test("upload: invalid files do not use a slot; no admin client means 503 and nothing is stored", async () => {
+  const h = world();
+  assert.equal((await send(form(new TextEncoder().encode("<html></html>"), "x.pdf"))).status, 415);
+  assert.equal((h.adminDb.data.upload_events ?? []).length, 0);
+  const h2 = world({ admin: false });
+  assert.equal((await send(form(minimalPdf()))).status, 503);
+  assert.equal(h2.client.storage.uploaded.length, 0);
 });
 
 test("upload: success stores under the user's firm folder and saves firm, user, hash and a sanitised name from the SERVER side", async () => {
