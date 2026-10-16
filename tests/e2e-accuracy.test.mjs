@@ -55,7 +55,8 @@ test("e2e: a clear GST invoice goes through every layer, costs no source call, s
   // form / table mapping: every editable column the review form reads exists on the saved record, every item column on every item
   for (const h of HEADER_FIELDS) assert.ok(h.column in r.extracted, `saved invoice lacks column ${h.column}`);
   for (const i of ITEM_FIELDS) for (const it of r.items) assert.ok(i.key in it, `saved item lacks column ${i.key}`);
-  for (const h of HEADER_FIELDS) if (h.statusKey !== "document_type") assert.ok(h.statusKey in r.extracted.field_status, `field_status lacks ${h.statusKey}`); // review/apply.ts keeps document_type out of field_status
+  const PRINTED_ONLY = new Set(["exchange_rate", "pre_tax_charges", "tcs_amount", "tds_amount", "round_off_amount", "net_payable_amount"]); // status exists only when the invoice prints them
+  for (const h of HEADER_FIELDS) if (h.statusKey !== "document_type" && !PRINTED_ONLY.has(h.statusKey)) assert.ok(h.statusKey in r.extracted.field_status, `field_status lacks ${h.statusKey}`); // review/apply.ts keeps document_type out of field_status
   // export compatibility: CSV, XLSX (zip signature) and Tally
   const x = exportRoundTrip(r);
   assert.match(x.csv, /INV-001/);

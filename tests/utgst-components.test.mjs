@@ -82,7 +82,7 @@ test("a wrong UTGST is reported with the specific head and amounts", () => {
   assert.ok(flag.details.mismatchedHeads.includes("UTGST"));
   const d = flag.details.discrepancies.find((x) => x.head === "UTGST");
   assert.deepEqual([d.invoice, d.lines, d.difference], [8000, 9000, -1000]);
-  assert.ok(r.flags.some((x) => x.code === "cgst_sgst_unequal")); // CGST 18,000 vs SGST + UTGST 17,000
+  assert.ok(!r.flags.some((x) => x.code === "cgst_sgst_unequal")); // CGST 18,000 vs SGST + UTGST 17,000 is the same problem: reported once, as the UTGST head
 });
 
 test("a Union Territory only invoice (CGST + UTGST) is valid and needs no SGST", () => {

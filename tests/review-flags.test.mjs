@@ -68,7 +68,9 @@ test("unknown place of supply with tax -> info only", () => {
 
 test("CGST and SGST that differ are flagged", () => {
   const flags = computeReviewFlags(header({ sgst_amount: 80, total_amount: 1170 }), FS, [item()], OPTS);
-  assert.ok(codes(flags).includes("cgst_sgst_unequal"));
+  // One problem, one flag: the head finding (tax_component_mismatch on sgst) replaces the generic cgst_sgst_unequal.
+  assert.ok(codes(flags).includes("cgst_sgst_unequal") || codes(flags).includes("tax_component_mismatch") || codes(flags).includes("tax_allocation_mismatch"));
+  assert.equal(codes(flags).filter((c) => c === "cgst_sgst_unequal").length, flags.some((x) => x.code === "tax_component_mismatch" || x.code === "tax_allocation_mismatch") ? 0 : 1);
 });
 
 test("tax without supplier GSTIN, tax on bill of supply", () => {

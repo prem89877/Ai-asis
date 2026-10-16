@@ -275,7 +275,7 @@ test("pipeline: INR invoice never calls the lookup", async () => {
 
 test("review re-check after an edit keeps the wide tolerance for a fetched rate", () => {
   const { extracted, items } = norm(usd());
-  const h = Object.fromEntries(HEADER_COLUMNS.map((c) => [c, extracted[c] ?? null]));
+  const h = { ...Object.fromEntries(HEADER_COLUMNS.map((c) => [c, extracted[c] ?? null])), exchange_rate: 83 }; // the rate is an editable header value
   const fs = { ...extracted.field_status, exchange_rate: { state: "value", confidence: 1, source: "fetched" } };
   const flags = computeReviewFlags(h, fs, items, OPTS, new Date("2026-10-11"), { exchange_rate: 83 });
   assert.deepEqual(flags.filter((x) => x.code === "arithmetic_line_mismatch"), []);

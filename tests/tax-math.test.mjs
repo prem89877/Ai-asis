@@ -40,10 +40,17 @@ test("regime: different states = IGST expected; foreign / unknown place of suppl
 
 test("CGST and SGST / UTGST with different amounts: warning on sgst", () => {
   const r = run(model({ sgst: f(60), grand_total: f(1150) }));
-  const flag = r.flags.find((x) => x.code === "cgst_sgst_unequal");
+  // The line items show which head is wrong, so the specific finding is reported once and the generic one is not repeated.
+  assert.ok(!codes(r).includes("cgst_sgst_unequal"));
+  const flag = r.flags.find((x) => x.code === "tax_component_mismatch");
   assert.ok(flag);
   assert.equal(flag.severity, "warning");
-  assert.equal(flag.details.difference, 30);
+  assert.equal(flag.field, "sgst");
+  // Without line evidence the generic check is still the one that reports it (second layer on its own).
+  const alone = checkTaxHeads(norm(model({ sgst: f(60), grand_total: f(1150), line_items: [] })).extracted, [], 100).flags.find((x) => x.code === "cgst_sgst_unequal");
+  assert.ok(alone);
+  assert.equal(alone.severity, "warning");
+  assert.equal(alone.details.difference, 30);
 });
 
 test("only CGST read, SGST missing, no IGST: one-sided warning", () => {
@@ -57,8 +64,8 @@ test("IGST invoice (no CGST / SGST): no equality or one-sided flag", () => {
 });
 
 test("line tax that does not match taxable x rate is flagged; half of it (one head printed) is accepted", () => {
-  assert.ok(codes(run(model({ line_items: [item({ tax_amount: f(108) })] }))).includes("line_tax_rate_mismatch"));
-  assert.ok(!codes(run(model({ line_items: [item({ tax_amount: f(90) })] }))).includes("line_tax_rate_mismatch"));
+  assert.ok(codes(run(model({ line_items: [item({ tax_amount: f(108) })] }))).includes("item_tax_rate_mismatch"));
+  assert.ok(!codes(run(model({ line_items: [item({ tax_amount: f(90) })] }))).includes("item_tax_rate_mismatch"));
 });
 
 test("Cess far above the taxable value is flagged as implausible; a normal cess is not", () => {
