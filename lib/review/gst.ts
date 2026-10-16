@@ -35,8 +35,9 @@ export function stateCodeFromPlace(text: string | null): string | null {
 }
 
 export function stateCodeFromGstin(gstin: string | null): string | null {
-  if (!gstin || gstin.length < 2) return null;
-  const c = gstin.slice(0, 2);
+  const g = gstin?.trim();
+  if (!g || g.length < 2) return null;
+  const c = g.slice(0, 2);
   return /^\d{2}$/.test(c) && STATE_NAMES[c] ? c : null;
 }
 
