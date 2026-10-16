@@ -242,7 +242,9 @@ export function validateInvoiceTotals(e: StoredExtracted, items: StoredItem[], o
   // TCS can only ever add to the invoice and TDS can only ever reduce the payment. Invoices print them as "(-) 1,000.00",
   // "Less: TDS 1,000.00" or plain, so the direction comes from what the figure IS, not from the sign it was printed with.
   const tcs = Math.abs(p(e.tcs_amount)), tds = Math.abs(p(e.tds_amount));
-  const printedRo = has(e.round_off_amount) ? toPaise(e.round_off_amount) : 0;
+  // A round-off the pipeline COMPUTED earlier (field_status source "computed") is a derived value, not a printed one: it must never be
+  // used to explain a difference again, or it would go stale after an edit and make the total pass / fail wrongly.
+  const printedRo = has(e.round_off_amount) && fs.round_off_amount?.source !== "computed" ? toPaise(e.round_off_amount) : 0;
   const disc = e.discount_amount !== null ? toPaise(e.discount_amount) : null;
   const actual = toPaise(total);
 
@@ -691,7 +693,7 @@ export function validateInvoice(data: InvoiceData, opts: EngineOptions): Invoice
     valid: !flags.some((f) => f.severity === "error" || f.severity === "warning"),
     flags,
     // A round-off printed on the invoice is never replaced by a computed one: the patch is only for an invoice that printed none.
-    patch: totals.roundOffApplied !== null && !has(e.round_off_amount) ? { round_off_amount: totals.roundOffApplied } : {},
+    patch: totals.roundOffApplied !== null && (!has(e.round_off_amount) || e.field_status?.round_off_amount?.source === "computed") ? { round_off_amount: totals.roundOffApplied } : {},
     summary,
   };
 }
