@@ -8,7 +8,7 @@ import { suggestGstinFixes, suggestionText } from "../extraction/gstin.ts";
 import { ITEM_FIELDS } from "./fields.ts";
 import type { HeaderColumn, ItemColumn } from "./fields.ts";
 import { HEADER_FIELDS } from "./fields.ts";
-import { parseAmount } from "./input.ts";
+import { cleanNumberText, parseAmount } from "./input.ts";
 
 export interface DraftIssue {
   severity: "error" | "warning";
@@ -37,8 +37,8 @@ function push<K extends string>(out: Partial<Record<K, DraftIssue[]>>, key: K, s
 
 // A number typed in a box. null = blank or not a number (the amount check reports a non-number on its own).
 function numberOf(raw: string): number | null {
-  const t = raw.replace(/[,\s]/g, "");
-  if (t === "" || !/^-?\d+(\.\d+)?$/.test(t)) return null;
+  const t = cleanNumberText(raw);
+  if (t === null || t === "") return null;
   const n = Number(t);
   return Number.isFinite(n) ? n : null;
 }

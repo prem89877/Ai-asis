@@ -18,8 +18,11 @@ export interface FlagOptions {
 
 const GST_START = "2017-07-01";
 
-function num(v: string | number | null): number | null {
-  return v === null || v === "" ? null : Number(v);
+// A missing (null / undefined / blank) or non-numeric value is "unknown" (null), never NaN: NaN would slip through every later comparison.
+function num(v: string | number | null | undefined): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 // `extras` = values the review screen does not edit but the validation engine needs (TCS, TDS, pre-tax charges,

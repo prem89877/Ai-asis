@@ -34,16 +34,38 @@ function decimalPlaces(n: number): number {
   return i < 0 ? 0 : s.length - i - 1;
 }
 
-// Accepts a number, or a plain numeric string ("1,234.50" is fine). Empty = null (field left blank).
+// Turns typed number text into a plain decimal string ("1,23,456.50" -> "123456.50", ".5" -> "0.5"), or null when it is not a number.
+// Commas are accepted ONLY as thousands separators (western 1,234,567 or Indian 12,34,567). A comma anywhere else, such as the
+// decimal comma in "12,5" or "1,50", is rejected: stripping it would silently turn 12.5 into 125. Empty text returns "".
+export function cleanNumberText(raw: string): string | null {
+  const t = raw.replace(/\s/g, "");
+  if (t === "") return "";
+  const sign = t.startsWith("-") ? "-" : "";
+  const body = sign ? t.slice(1) : t;
+  const parts = body.split(".");
+  if (parts.length > 2) return null;
+  const [int, frac] = parts;
+  if (frac !== undefined && !/^\d+$/.test(frac)) return null;
+  if (int === "") {
+    if (frac === undefined) return null; // "-" or "."
+  } else if (!(/^\d+$/.test(int) || /^\d{1,3}(,\d{3})+$/.test(int) || /^\d{1,2}(,\d{2})*,\d{3}$/.test(int))) {
+    return null;
+  }
+  return `${sign}${int === "" ? "0" : int.replace(/,/g, "")}${frac !== undefined ? `.${frac}` : ""}`;
+}
+
+// Accepts a number, or a plain numeric string ("1,234.50" and ".5" are fine, "12,5" is not). Empty = null (field left blank).
 export function parseAmount(raw: unknown, label: string, dp: number, max: number): { ok: true; value: number | null } | { ok: false; message: string } {
   if (raw === null || raw === undefined) return { ok: true, value: null };
   let n: number;
   if (typeof raw === "number") {
     n = raw;
   } else if (typeof raw === "string") {
-    const t = raw.replace(/[,\s]/g, "");
+    const t = cleanNumberText(raw);
     if (t === "") return { ok: true, value: null };
-    if (!/^-?\d+(\.\d+)?$/.test(t)) return { ok: false, message: `${label}: enter a number.` };
+    if (t === null) {
+      return { ok: false, message: raw.includes(",") ? `${label}: enter a number. Use a dot for decimals (12.5), and commas only to group thousands.` : `${label}: enter a number.` };
+    }
     n = Number(t);
   } else {
     return { ok: false, message: `${label}: enter a number.` };
