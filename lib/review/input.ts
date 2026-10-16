@@ -91,6 +91,12 @@ function parseHeaderValue(def: (typeof HEADER_FIELDS)[number], raw: unknown): { 
   switch (def.kind) {
     case "amount":
       return parseAmount(raw, def.label, 2, MAX_ABS_AMOUNT);
+    case "rate": {
+      // numeric(14, 6) and the database requires a rate above 0; blank = no rate printed (stays NULL, never defaulted to 1).
+      const r = parseAmount(raw, def.label, 6, 99_999_999);
+      if (r.ok && r.value !== null && r.value <= 0) return { ok: false, message: `${def.label}: enter a rate above 0, or leave it blank.` };
+      return r;
+    }
     case "gstin": {
       if (raw === null || raw === undefined) return { ok: true, value: null };
       if (typeof raw !== "string") return { ok: false, message: `${def.label}: enter text.` };

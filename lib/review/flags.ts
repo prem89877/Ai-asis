@@ -25,13 +25,20 @@ function num(v: string | number | null | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-// `extras` = values the review screen does not edit but the validation engine needs (TCS, TDS, pre-tax charges,
-// round-off, net payable, exchange rate). They come from the saved record, so a re-check after an edit never forgets them.
+// `extras` = values the engine needs that may not be in the header: IRN / ack no / e-way bill no, and (for callers that do not
+// send them in the header) TCS, TDS, pre-tax charges, round-off, net payable and exchange rate from the saved record.
 export type ReviewExtras = Pick<StoredExtracted, "exchange_rate" | "tcs_amount" | "tds_amount" | "pre_tax_charges" | "round_off_amount" | "net_payable_amount" | "irn" | "ack_no" | "eway_bill_no">;
 
+// These six are editable on the review screen now, so a value typed there wins over the saved one. When the caller's header does
+// not carry a column at all (older callers), the saved value from `extras` is still used.
+const EDITABLE_EXTRAS = ["exchange_rate", "tcs_amount", "tds_amount", "pre_tax_charges", "round_off_amount", "net_payable_amount"] as const;
+
 export function toStoredExtracted(h: HeaderValues, fieldStatus: Record<string, FieldMeta>, extras: Partial<ReviewExtras> = {}): StoredExtracted {
+  const typed: Partial<ReviewExtras> = {};
+  for (const c of EDITABLE_EXTRAS) if (h[c] !== undefined) typed[c] = num(h[c]);
   return {
     ...extras,
+    ...typed,
     vendor_name: h.vendor_name as string | null,
     buyer_name: h.buyer_name as string | null,
     vendor_gstin: h.vendor_gstin as string | null,
@@ -104,7 +111,7 @@ export function computeReviewFlags(h: HeaderValues, fieldStatus: Record<string, 
         message: `The ${def.label.toLowerCase()} could not be saved from the original document. Enter it from the original.`,
       });
     }
-    if (def.kind === "amount" && !memo) {
+    if (def.kind === "amount" && !memo && !def.signed) {
       const v = num(h[def.column]);
       if (v !== null && v < 0) {
         flags.push({ code: "negative_amount", severity: "warning", field: def.statusKey, message: `The ${def.label.toLowerCase()} is negative. Check the original.` });

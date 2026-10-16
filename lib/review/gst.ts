@@ -93,21 +93,9 @@ export function gstChecks(doc: Doc, items: StoredItem[], opts: GstOptions): Revi
     });
   }
 
-  // 2. CGST equals the state-level tax (SGST + UTGST, each its own amount) on an intra-state supply. Compared as a SUM, so an
-  // invoice with SGST lines and UTGST lines does not raise a false alarm, and SGST alone is never forced to equal CGST.
-  if (doc.cgst_amount !== null && ((doc.sgst_amount ?? null) !== null || (doc.utgst_amount ?? null) !== null) && nonZero(doc.cgst_amount) && (nonZero(doc.sgst_amount) || nonZero(doc.utgst_amount))) {
-    const state = toPaise(doc.sgst_amount ?? 0) + toPaise(doc.utgst_amount ?? 0);
-    if (Math.abs(toPaise(doc.cgst_amount) - state) > Math.min(tol, 100)) {
-      flags.push({
-        code: "cgst_sgst_unequal", severity: "warning", field: "cgst",
-        message: `${nonZero(doc.utgst_amount) ? "SGST + UTGST" : "SGST"}: expected INR ${(toPaise(doc.cgst_amount) / 100).toFixed(2)} (equal to CGST), found INR ${(state / 100).toFixed(2)}. ${nonZero(doc.utgst_amount) ? "CGST differs from SGST + UTGST. They are normally equal." : "CGST and SGST amounts differ. They are normally equal."}`,
-        details: {
-          cgst: doc.cgst_amount, sgst: doc.sgst_amount, utgst: doc.utgst_amount ?? null, stateTax: state / 100,
-          field: "sgst", expected: toPaise(doc.cgst_amount) / 100, observed: state / 100, reason: "CGST must equal the state-level tax (SGST + UTGST).",
-        },
-      });
-    }
-  }
+  // 2. CGST = SGST (+ UTGST) is NOT checked here any more: tax-math.ts (checkTaxHeads) owns that rule, with the per-line rounding
+  // tolerance and the missing-UTGST hint, and it runs at extraction AND on every review save. A second copy here raised the same
+  // problem twice (cgst_sgst_unequal from two places).
 
   // 3. Tax charged by someone with no GSTIN, or on a bill of supply.
   if (anyTax && !doc.vendor_gstin) {
@@ -142,13 +130,8 @@ export function gstChecks(doc: Doc, items: StoredItem[], opts: GstOptions): Revi
     }
     const expected = toPaise((it.taxable_amount * rate) / 100);
     expectedTotal += expected;
-    if (it.gst_amount !== null && Math.abs(toPaise(it.gst_amount) - expected) > tol) {
-      flags.push({
-        code: "item_tax_rate_mismatch", severity: "warning", field: "tax_amount", itemPosition: i + 1,
-        message: "The item's GST amount does not match its taxable value at the stated rate.",
-        details: { expected: expected / 100, extracted: it.gst_amount, rate },
-      });
-    }
+    // The per-line "GST amount vs taxable x rate" verdict (item_tax_rate_mismatch) is raised by tax-math.ts only: it also accepts a
+    // half-rate line (one head printed) and a line tax that includes cess. Raising it here too gave one line two different verdicts.
   });
 
   if (allRated) {

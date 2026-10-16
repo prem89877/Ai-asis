@@ -22,7 +22,7 @@ type ItemDraft = Record<ItemColumn, string>;
 
 const GST_START = "2017-07-01";
 const TAX_COLUMNS: HeaderColumn[] = ["cgst_amount", "sgst_amount", "utgst_amount", "igst_amount", "cess_amount"];
-const TOTAL_COLUMNS: HeaderColumn[] = ["taxable_amount", "discount_amount", "cgst_amount", "sgst_amount", "utgst_amount", "igst_amount", "cess_amount", "total_amount"];
+const TOTAL_COLUMNS: HeaderColumn[] = ["taxable_amount", "discount_amount", "cgst_amount", "sgst_amount", "utgst_amount", "igst_amount", "cess_amount", "total_amount", "tcs_amount", "round_off_amount", "pre_tax_charges"];
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/;
 
@@ -103,7 +103,13 @@ export function checkHeaderDraft(draft: HeaderDraft, base: HeaderDraft, now: Dat
       case "amount": {
         const msg = amountMessage(raw, 2, MAX_ABS_AMOUNT);
         if (msg) push(out, c, "error", msg);
-        else if ((numberOf(raw) ?? 0) < 0 && !memo) push(out, c, "warning", "Negative amount. Only credit and debit notes normally have one.");
+        else if ((numberOf(raw) ?? 0) < 0 && !memo && !def.signed) push(out, c, "warning", "Negative amount. Only credit and debit notes normally have one.");
+        break;
+      }
+      case "rate": {
+        const msg = amountMessage(raw, 6, 99_999_999);
+        if (msg) push(out, c, "error", msg);
+        else if ((numberOf(raw) ?? 0) <= 0) push(out, c, "error", "Enter a rate above 0, or leave the box blank.");
         break;
       }
       default:
@@ -138,9 +144,15 @@ export function checkHeaderDraft(draft: HeaderDraft, base: HeaderDraft, now: Dat
       // that equals taxable + taxes - discount is explained. It is never treated as TCS / TDS. The discount is only used when typed.
       const discount = n("discount_amount");
       const netOfDiscount = discount !== null && discount > 0 ? expected - discount : null;
-      const explained = Math.abs(expected - total) <= 2 || (netOfDiscount !== null && Math.abs(netOfDiscount - total) <= 2);
+      // TCS (added after tax) and a printed round-off are typed on this screen too, so they are part of the sum. Pre-tax charges may be
+      // inside or outside the taxable value, so a total that matches either way is explained.
+      const tcs = n("tcs_amount") ?? 0;
+      const roundOff = n("round_off_amount") ?? 0;
+      const charges = n("pre_tax_charges") ?? 0;
+      const bases = charges !== 0 ? [expected, expected + charges] : [expected];
+      const explained = bases.some((b) => Math.abs(b + tcs + roundOff - total) <= 2 || (netOfDiscount !== null && Math.abs(b - (discount ?? 0) + tcs + roundOff - total) <= 2));
       if (!explained) {
-        push(out, "total_amount", "warning", `After your change, taxable value + taxes = ${inr(expected)}${netOfDiscount !== null ? ` (${inr(netOfDiscount)} after the discount)` : ""} but the grand total is ${inr(total)} (difference ${inr(Math.abs(expected - total))}). Ignore this if TCS, round-off or other charges are printed on the invoice.`);
+        push(out, "total_amount", "warning", `After your change, taxable value + taxes = ${inr(expected)}${netOfDiscount !== null ? ` (${inr(netOfDiscount)} after the discount)` : ""} but the grand total is ${inr(total)} (difference ${inr(Math.abs(expected - total))}). Ignore this if other charges are printed on the invoice.`);
       }
     }
   }

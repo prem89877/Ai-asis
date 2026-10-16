@@ -1,7 +1,7 @@
 // Editable fields of an extracted invoice: one place that maps database columns, the field_status keys
 // written by Phase 3, labels and input kinds. Used by the review API and the review screen.
 
-export type FieldKind = "text" | "gstin" | "date" | "currency" | "amount" | "doctype";
+export type FieldKind = "text" | "gstin" | "date" | "currency" | "amount" | "rate" | "doctype";
 
 export type HeaderColumn =
   | "vendor_name"
@@ -12,15 +12,21 @@ export type HeaderColumn =
   | "invoice_date"
   | "place_of_supply"
   | "currency"
+  | "exchange_rate"
   | "document_type"
   | "taxable_amount"
   | "discount_amount"
+  | "pre_tax_charges"
   | "cgst_amount"
   | "sgst_amount"
   | "utgst_amount"
   | "igst_amount"
   | "cess_amount"
-  | "total_amount";
+  | "total_amount"
+  | "tcs_amount"
+  | "tds_amount"
+  | "round_off_amount"
+  | "net_payable_amount";
 
 export interface HeaderFieldDef {
   column: HeaderColumn;
@@ -28,6 +34,7 @@ export interface HeaderFieldDef {
   label: string;
   kind: FieldKind;
   maxLength?: number;
+  signed?: boolean; // a negative value is normal for this field (round-off), so it never raises the "negative amount" note
 }
 
 export const HEADER_FIELDS: readonly HeaderFieldDef[] = [
@@ -39,16 +46,25 @@ export const HEADER_FIELDS: readonly HeaderFieldDef[] = [
   { column: "invoice_date", statusKey: "invoice_date", label: "Invoice date", kind: "date" },
   { column: "place_of_supply", statusKey: "place_of_supply", label: "Place of supply", kind: "text", maxLength: 100 },
   { column: "currency", statusKey: "currency", label: "Currency", kind: "currency" },
+  { column: "exchange_rate", statusKey: "exchange_rate", label: "Exchange rate (INR per 1 unit)", kind: "rate" },
   { column: "document_type", statusKey: "document_type", label: "Document type", kind: "doctype" },
   { column: "taxable_amount", statusKey: "taxable_value", label: "Taxable value", kind: "amount" },
   { column: "discount_amount", statusKey: "discount_total", label: "Discount", kind: "amount" },
+  { column: "pre_tax_charges", statusKey: "pre_tax_charges", label: "Pre-tax charges (freight / packing)", kind: "amount" },
   { column: "cgst_amount", statusKey: "cgst", label: "CGST", kind: "amount" },
   { column: "sgst_amount", statusKey: "sgst", label: "SGST", kind: "amount" },
   { column: "utgst_amount", statusKey: "utgst_amount", label: "UTGST", kind: "amount" },
   { column: "igst_amount", statusKey: "igst", label: "IGST", kind: "amount" },
   { column: "cess_amount", statusKey: "cess", label: "Cess", kind: "amount" },
   { column: "total_amount", statusKey: "grand_total", label: "Grand total", kind: "amount" },
+  { column: "tcs_amount", statusKey: "tcs_amount", label: "TCS", kind: "amount" },
+  { column: "tds_amount", statusKey: "tds_amount", label: "TDS", kind: "amount" },
+  { column: "round_off_amount", statusKey: "round_off_amount", label: "Round-off", kind: "amount", signed: true },
+  { column: "net_payable_amount", statusKey: "net_payable_amount", label: "Net payable", kind: "amount" },
 ];
+
+// Header columns that hold a number (the review route reads these as numbers, everything else as text).
+export const NUMERIC_HEADER_COLUMNS: readonly HeaderColumn[] = HEADER_FIELDS.filter((f) => f.kind === "amount" || f.kind === "rate").map((f) => f.column);
 
 export const HEADER_COLUMNS: readonly HeaderColumn[] = HEADER_FIELDS.map((f) => f.column);
 
