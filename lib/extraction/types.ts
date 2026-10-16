@@ -117,7 +117,8 @@ export interface FieldMeta {
   // "computed" = derived by the validation engine (for example a round-off that absorbs a rounding difference).
   // "fetched" = not on the document: looked up from a public exchange rate source for the invoice date (forex.ts).
   // "source_check" = re-read from the original file by the source-grounded verification (source-verify.ts) and proven by a rule.
-  source?: "recheck" | "human" | "computed" | "fetched" | "source_check";
+  // "auto_fix" = a line value the maths replaced (line-fix.ts). It is a proposal, never "proven": its confidence stays low so a human still looks at it.
+  source?: "recheck" | "human" | "computed" | "fetched" | "source_check" | "auto_fix";
   // Set when a value was replaced by evidence from the document (source re-read, or a line-item fix). `from` = the value read
   // first, `to` = the one now saved. Kept so the review screen can toggle between them and the audit trail never loses the original.
   // Normalization never sets this for a GSTIN: a failing GSTIN is kept as read.

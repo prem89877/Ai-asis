@@ -17,8 +17,14 @@ const RATE_REL_TOLERANCE = 0.0005;
 // Lines whose taxable/net ratios agree this closely are treated as converted with one common rate.
 const MAX_PLAUSIBLE_RATE = 1_000_000;
 // A rate that was FETCHED from a public source (not printed on the invoice) is a market reference rate, so the rate the
-// supplier actually used can differ from it by a little. Lines are accepted within this fraction (3 %); beyond it they are flagged.
-export const FETCHED_RATE_REL_TOLERANCE = 0.03;
+// supplier actually used can differ from it by a little. Lines are accepted within this fraction (1 %); beyond it they are flagged.
+// (It was 3 %, which let INR 3,000 slip through on a INR 1 lakh line. Day-to-day differences between a reference rate and a supplier's
+// bank / customs rate are normally well below 1 %.)
+export const FETCHED_RATE_REL_TOLERANCE = 0.01;
+// Readings that are only GUESSES (the extractor did not say whether a discount is a percentage or a flat amount, so every reading is
+// tried) get a much tighter absolute tolerance than the normal INR 1 rounding allowance. Several guesses with a wide tolerance each
+// would otherwise make a wrong taxable value match by luck. Only genuine paisa rounding is allowed for them.
+export const GUESS_TOLERANCE_PAISE = 2;
 export { RATE_REL_TOLERANCE };
 
 // Which relative tolerance applies to the exchange rate of this invoice: tight for a printed rate, wider for a fetched one.
@@ -154,32 +160,36 @@ export function validateLineItem(it: StoredItem, position: number, rc: LineRateC
   const disc = it.discount_amount;
   const cands = lineCandidates(it);
   const gross = clean(q * p);
-  const within = (expectedPaise: number, relTol: number) => Math.abs(actual - expectedPaise) <= tol + Math.round(Math.abs(expectedPaise) * relTol);
+  const guessTol = Math.min(tol, GUESS_TOLERANCE_PAISE);
   const flip = actual !== 0 && gross !== 0 && actual < 0 !== gross < 0; // a return / rebate printed with the opposite sign
-  const withSign = (list: number[]) => (flip ? [...list, ...list.map((e) => -e)] : list);
 
-  // Values exactly as printed in one currency: every reading of the discount, plus gross.
-  const plain = [...cands.map((c) => toPaise(c.net)), toPaise(gross)];
-  const plainOk = withSign(plain);
-  if (plainOk.some((e) => within(e, 0))) return { status: "pass", expectedPaise: plain[0], basis: "invoice_currency" };
+  // A reading is "certain" when nothing had to be guessed: the discount type is known, there is no discount, or it is the flat
+  // reading (the original behaviour). "percent" and "discount already inside the price" are guesses when the type is unknown.
+  interface Expect { paise: number; certain: boolean }
+  const expectations = (rate: number): Expect[] => cands.map((c) => ({ paise: toPaise(c.net * rate), certain: it.discount_type != null || c.reading === "flat" || (c.reading === "no_discount" && nz(disc) === 0) }));
+  const matches = (list: Expect[], relTol: number): boolean =>
+    list.flatMap((e) => (flip ? [e, { ...e, paise: -e.paise }] : [e])).some((e) => Math.abs(actual - e.paise) <= (e.certain ? tol : guessTol) + Math.round(Math.abs(e.paise) * relTol));
+
+  // Values exactly as printed in one currency: one value per reading of the discount (gross is the "no_discount" reading, it is not
+  // tried a second time).
+  const plain = expectations(1);
+  if (matches(plain, 0)) return { status: "pass", expectedPaise: plain[0].paise, basis: "invoice_currency" };
 
   let rateUsed: number | null = null;
   if (rc.foreign) {
     const r = rc.explicitRate ?? rc.impliedRate;
     if (r === null) return { status: "unverified" };
-    const converted = withSign([
-      ...cands.map((c) => toPaise(c.net * r)), // discount (flat or %) in the invoice currency
-      toPaise(gross * r),
-      toPaise(gross * r - nz(disc)), // flat discount already in INR
-    ]);
+    const converted = expectations(r); // discount (flat or %) in the invoice currency, then converted
+    // A flat discount that is already in INR is one more guess, so it only gets the tight tolerance.
+    if (nz(disc) !== 0 && it.discount_type !== "PERCENT") converted.push({ paise: toPaise(gross * r - nz(disc)), certain: false });
     const relTol = rc.rateTolerance ?? RATE_REL_TOLERANCE;
-    if (converted.some((e) => within(e, relTol))) return { status: "pass", expectedPaise: converted[0], basis: "inr" };
+    if (matches(converted, relTol)) return { status: "pass", expectedPaise: converted[0].paise, basis: "inr" };
     rateUsed = r;
   }
 
   // Reported "expected" uses the primary reading: the explicit type if known, else flat (the original behaviour).
   const net = (it.discount_type === "PERCENT" ? cands.find((c) => c.reading === "percent") : cands[0])?.net ?? gross;
-  const expected = rateUsed === null ? plain[0] : toPaise(net * rateUsed);
+  const expected = rateUsed === null ? plain[0].paise : toPaise(net * rateUsed);
   const flag: ReviewFlag = {
     code: "arithmetic_line_mismatch",
     severity: "warning",

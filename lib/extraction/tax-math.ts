@@ -95,6 +95,10 @@ export function checkTaxHeads(e: StoredExtracted, items: StoredItem[], tolerance
   // 3. Tax printed on a line vs taxable x rate of that line. A line tax of about half the expected figure usually means only
   // one of CGST / SGST was printed in that column, so it is accepted; anything else is a misread digit or a wrong rate.
   const foreign = isForeign(e.currency, e.exchange_rate) && hasRate(e.exchange_rate);
+  // "One head only" (a line tax of half the expected figure) is only believable when the invoice is split into CGST + SGST / UTGST.
+  // On an inter-state (IGST) supply there is ONE head carrying the full rate, so 9 % instead of 18 % is a wrong rate, not a column
+  // that shows half. When the regime cannot be determined, half is accepted only if the invoice itself shows CGST / state tax and no IGST.
+  const allowHalf = regime.kind === "intra_state" || (regime.kind === "not_determined" && !nonZero(e.igst_amount) && (nonZero(e.cgst_amount) || hasStateTax(e)));
   if (!foreign) {
     const bad: { position: number; expected: number; extracted: number }[] = [];
     // Line tax that already contains the cess (GST + cess): compare the GST part with taxable x rate (see tax-components.ts).
@@ -105,7 +109,7 @@ export function checkTaxHeads(e: StoredExtracted, items: StoredItem[], tolerance
       const got = toPaise(it.gst_amount);
       const allowed = Math.max(tolerancePaise, Math.round(Math.abs(expected) * 0.005));
       if (Math.abs(got - expected) <= allowed) return;
-      if (Math.abs(got - expected / 2) <= allowed) return; // one head only
+      if (allowHalf && Math.abs(got - expected / 2) <= allowed) return; // one head only (CGST + SGST / UTGST invoices only)
       const gstPart = noCess ? noCess.taxes[i] : null;
       if (gstPart !== null && Math.abs(gstPart - expected) <= allowed) return; // rate is the GST rate, the printed tax also holds the cess
       bad.push({ position: i + 1, expected: expected / 100, extracted: got / 100 });

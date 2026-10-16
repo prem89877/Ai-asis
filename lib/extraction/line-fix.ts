@@ -15,13 +15,19 @@
 //        - sum of all item taxable values = invoice taxable value
 //      plus one point when the model's own confidence for that field is clearly the lowest of the three and below
 //      `maxConfidence`.
-//   5. The best candidate wins only with a score of at least 2 and strictly more than any other candidate, and only when
-//      the field's confidence is below `maxConfidence` (or all three independent witnesses agree).
+//      The witnesses all test the TAXABLE value. A taxable-value candidate is judged by them directly. A quantity or unit-price
+//      candidate keeps the printed taxable value, so the witnesses only prove "the taxable value is right"; they cannot tell
+//      quantity from unit price. That is why those candidates also need the confidence point (this field is clearly the least
+//      certain one), which is the only thing that points at THIS field.
+//   5. The best candidate wins only with at least MIN_WITNESSES (2) independent witnesses (a single witness plus the confidence
+//      point is not enough), strictly more points than any other candidate, and only when the field's confidence is below
+//      `maxConfidence` (or all three independent witnesses agree).
 //   Otherwise nothing changes and the normal "arithmetic_line_mismatch" warning goes to a human, plus a short info note
 //   saying why the auto-correction was not applied.
 //
 // The original value is never lost: it is kept in field_status[...].autoCorrected.from, in the info flag, and the raw
-// model output stays in raw_extraction. Foreign currency lines are corrected only when the invoice PRINTS an exchange rate.
+// model output stays in raw_extraction. A corrected value is a PROPOSAL, not a fact: it is marked source "auto_fix" and keeps a
+// low confidence (at most AUTOFIX_CONFIDENCE_CAP), it is never promoted to confidence 1 / "computed". Foreign currency lines are corrected only when the invoice PRINTS an exchange rate.
 import { hasRate, isForeign, lineCandidates, validateLineItem } from "./arithmetic.ts";
 import type { LineRateContext, Reading } from "./arithmetic.ts";
 import { toPaise } from "./normalize.ts";
@@ -36,6 +42,8 @@ const FIX_LABEL: Record<FixField, string> = { quantity: "quantity", unit_price: 
 export const DEFAULT_LINE_FIX_MAX_CONFIDENCE = 0.95;
 const CONFIDENCE_MARGIN = 0.05; // the suspect field must be this much less certain than the other two
 const MIN_SCORE = 2;
+const MIN_WITNESSES = 2; // independent witnesses a candidate needs, whatever its confidence point says
+export const AUTOFIX_CONFIDENCE_CAP = 0.6; // an auto-corrected value never claims more certainty than this
 const RATE_REL_TOLERANCE = 0.0005; // printed exchange rates have 2 to 4 decimals (same value as arithmetic.ts)
 
 export interface LineFixOptions {
@@ -189,9 +197,14 @@ function solveLine(items: StoredItem[], index: number, extracted: StoredExtracte
     return { ...c, witnesses, independent: witnesses.length, confidencePoint, score: witnesses.length + (confidencePoint ? 1 : 0) };
   });
   scored.sort((a, b) => b.score - a.score);
-  const best = scored[0];
-  if (best.score < MIN_SCORE) return { kind: "skipped", reason: "weak_evidence" };
-  if (scored.length > 1 && scored[1].score === best.score) return { kind: "skipped", reason: "ambiguous" };
+  // Quantity / unit price candidates are only eligible with the confidence point: the witnesses cannot pick between them.
+  const eligible = scored.filter((c) => c.independent >= MIN_WITNESSES && (c.field === "taxable_amount" || c.confidencePoint));
+  eligible.sort((a, b) => b.score - a.score);
+  const top = eligible[0];
+  if (!top || top.score < MIN_SCORE) return { kind: "skipped", reason: "weak_evidence" };
+  // Ambiguity is judged against ALL scored candidates, not only the eligible ones: a rival that is just as good blocks the fix.
+  if (scored.some((c) => c !== top && c.score >= top.score && c.independent >= MIN_WITNESSES)) return { kind: "skipped", reason: "ambiguous" };
+  const best = top;
   if (!(conf[best.field] < opts.maxConfidence) && best.independent < 3) return { kind: "skipped", reason: "model_confident" };
   const from = best.field === "taxable_amount" ? t : best.field === "quantity" ? q : p;
   return { kind: "fixed", best, from, originalConfidence: conf[best.field] };
@@ -250,7 +263,8 @@ export function reconcileLineItems(input: StoredItem[], extracted: StoredExtract
       return;
     }
     const { best, from, originalConfidence } = out;
-    const status: FieldMeta = { state: "value", confidence: 1, source: "computed", autoCorrected: { from: String(from), to: String(best.value) } };
+    // Honest metadata: the number was proposed by the maths, nobody has confirmed it. Keep the original (low) confidence, capped.
+    const status: FieldMeta = { state: "value", confidence: Math.min(originalConfidence, AUTOFIX_CONFIDENCE_CAP), source: "auto_fix", autoCorrected: { from: String(from), to: String(best.value) } };
     it.field_status[FIX_STATUS_KEY[best.field]] = status;
     it[best.field] = best.value;
     fixed += 1;
