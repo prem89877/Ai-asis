@@ -34,7 +34,7 @@ test("taxable value read as 1,000 instead of 10,000: corrected, original kept, i
   assert.equal(r.fixed, 1);
   assert.equal(r.items[0].taxable_amount, 10000);
   assert.deepEqual(r.items[0].field_status.taxable_value.autoCorrected, { from: "1000", to: "10000" });
-  assert.equal(r.items[0].field_status.taxable_value.source, "computed");
+  assert.equal(r.items[0].field_status.taxable_value.source, "auto_fix");
   assert.equal(r.before[0].taxable_amount, 1000, "input is not mutated");
   assert.equal(r.flags.length, 1);
   assert.equal(r.flags[0].code, "line_item_auto_corrected");
@@ -146,15 +146,17 @@ async function pipeline(m, checkConfig) {
 // 10 x 1,000 = 10,000 + 900 CGST + 900 SGST = 11,800, but the line's taxable value was read as 1,000 (low confidence).
 const misread = () => model({ taxable_value: f(10000), cgst: f(900), sgst: f(900), grand_total: f(11800), line_items: [good({ taxable_value: f(1000, 0.6) })] });
 
-test("pipeline: misread line value is corrected, saved corrected, outcome completed with an info note", async () => {
+test("pipeline: misread line value is corrected, saved corrected, and still goes to a human (low confidence kept)", async () => {
   const { r, saved } = await pipeline(misread(), { lowConfidence: 0.8, tolerancePaise: 100 });
-  assert.equal(r.outcome, "completed");
+  // The corrected number is a proposal: it keeps a low confidence and source "auto_fix", so the invoice is reviewed, not auto-completed.
+  assert.equal(r.outcome, "needs_review");
+  assert.equal(saved.items[0].field_status.taxable_value.source, "auto_fix");
+  assert.ok(saved.items[0].field_status.taxable_value.confidence <= 0.6);
   assert.equal(saved.items[0].taxable_amount, 10000);
   assert.deepEqual(saved.items[0].field_status.taxable_value.autoCorrected, { from: "1000", to: "10000" });
   const codes = saved.extracted.review_flags.map((x) => x.code);
   assert.ok(codes.includes("line_item_auto_corrected"));
   assert.ok(!codes.includes("arithmetic_line_mismatch"));
-  assert.ok(!codes.includes("low_confidence_item"));
 });
 
 test("pipeline: lineFix off keeps the old behaviour (warning, value untouched, human review)", async () => {
@@ -173,4 +175,25 @@ test("review recompute keeps the audit note while the value is still the correct
   assert.ok(computeReviewFlags(h, n.extracted.field_status, fixed, opts).some((x) => x.code === "line_item_auto_corrected"));
   const edited = fixed.map((x) => ({ ...x, taxable_amount: 9999, field_status: { ...x.field_status, taxable_value: { state: "value", confidence: 1, source: "human" } } }));
   assert.ok(!computeReviewFlags(h, n.extracted.field_status, edited, opts).some((x) => x.code === "line_item_auto_corrected"));
+});
+
+test("one witness + confidence point (score 2) no longer corrects; a quantity / price fix needs the confidence point", () => {
+  // Only the GST amount supports 10,000 (line total and invoice total missing); confidence of the taxable value is clearly the lowest.
+  const bad = good({ taxable_value: f(1000, 0.6), line_total: { status: "missing", value: null, confidence: 0.9 } });
+  const r = run(model({ taxable_value: { status: "missing", value: null, confidence: 0.9 }, line_items: [bad] }));
+  assert.equal(r.fixed, 0);
+  assert.equal(r.flags[0].details.reason, "weak_evidence");
+});
+
+test("unit price misread with the SAME confidence as quantity: witnesses cannot tell them apart, so nothing is changed", () => {
+  const r = run(inv([good({ unit_price: f(100, 0.9), quantity: f(10, 0.9) })]));
+  assert.equal(r.fixed, 0);
+});
+
+test("a corrected value is never promoted to confidence 1 / computed", () => {
+  const r = run(inv([good({ unit_price: f(100, 0.7) })]));
+  assert.equal(r.fixed, 1);
+  const m = r.items[0].field_status.unit_price;
+  assert.equal(m.source, "auto_fix");
+  assert.ok(m.confidence <= 0.6);
 });

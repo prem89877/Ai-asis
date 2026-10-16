@@ -199,16 +199,18 @@ test("forex: detectBasis and convertToInr", () => {
 
 // ---- wider tolerance only for a FETCHED rate ----------------------------------------------------------------------------
 test("tolerance: wide for a fetched rate, strict for a printed one", () => {
-  assert.equal(rateToleranceFor({ exchange_rate: { source: "fetched" } }), 0.03);
+  assert.equal(rateToleranceFor({ exchange_rate: { source: "fetched" } }), 0.01);
   assert.equal(rateToleranceFor({ exchange_rate: { source: "recheck" } }), 0.0005);
   assert.equal(rateToleranceFor({}), 0.0005);
   // 5 x 1200 - 100 = 5900 USD. Supplier used 83.50 -> 492,650.00. Reference rate 83.00 -> 489,700.00 (0.6 % apart).
   const it = [{ description: "x", hsn_code: null, quantity: 5, unit: null, unit_price: 1200, discount_amount: 100, taxable_amount: 492650, gst_rate: 18, gst_amount: null, line_total: null, field_status: {} }];
   const base = { currency: "USD", exchangeRate: 83, tolerancePaise: 100 };
   assert.equal(checkLineItems(it, base).length, 1); // strict: flagged
-  assert.deepEqual(checkLineItems(it, { ...base, rateTolerance: 0.03, rateFetched: true }), []); // fetched: accepted
+  assert.deepEqual(checkLineItems(it, { ...base, rateTolerance: 0.01, rateFetched: true }), []); // fetched: accepted
   const far = [{ ...it[0], taxable_amount: 530000 }]; // 7 % off: still flagged with the wide tolerance
-  assert.equal(checkLineItems(far, { ...base, rateTolerance: 0.03, rateFetched: true }).length, 1);
+  assert.equal(checkLineItems(far, { ...base, rateTolerance: 0.01, rateFetched: true }).length, 1);
+  const twoPct = [{ ...it[0], taxable_amount: 489700 * 0.98 }]; // 2 % off the reference: no longer accepted (the old 3 % let it pass)
+  assert.equal(checkLineItems(twoPct, { ...base, rateTolerance: 0.01, rateFetched: true }).length, 1);
 });
 
 // ---- whole pipeline -----------------------------------------------------------------------------------------------------
