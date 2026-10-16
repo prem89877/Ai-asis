@@ -6,6 +6,7 @@ import { decryptSecret, encryptSecret } from "./crypto.ts";
 import { GOOGLE_SCOPES, googleRefresh } from "./google.ts";
 import type { GoogleConfig, OAuthTokens } from "./google.ts";
 import { IntegrationError } from "./http.ts";
+import type { ProviderOpts } from "./http.ts";
 import { MICROSOFT_SCOPES, microsoftRefresh } from "./microsoft.ts";
 import type { MicrosoftConfig } from "./microsoft.ts";
 import { hashState } from "./oauth.ts";
@@ -105,7 +106,7 @@ export async function recordConnectionError(admin: SupabaseClient, conn: Pick<Co
 
 // Returns a valid access token, refreshing it when it is about to expire. Microsoft rotates the refresh token on every
 // refresh, so the new one is saved. A revoked or expired grant marks the connection "needs_reauth" and throws auth_expired.
-export async function getAccessToken(admin: SupabaseClient, conn: Connection): Promise<string> {
+export async function getAccessToken(admin: SupabaseClient, conn: Connection, opts: ProviderOpts = {}): Promise<string> {
   if (conn.status !== "active") throw new IntegrationError("auth_expired");
   const aad = tokenAad(conn.firm_id, conn.provider);
   if (conn.access_token_enc && conn.access_expires_at && Date.parse(conn.access_expires_at) - Date.now() > 60_000) {
@@ -117,8 +118,8 @@ export async function getAccessToken(admin: SupabaseClient, conn: Connection): P
   const cfg = providerConfigs();
   let tokens: OAuthTokens;
   try {
-    if (conn.provider === "google_sheets") { if (!cfg.google) throw new IntegrationError("unknown"); tokens = await googleRefresh(cfg.google, refresh); }
-    else { if (!cfg.microsoft) throw new IntegrationError("unknown"); tokens = await microsoftRefresh(cfg.microsoft, refresh); }
+    if (conn.provider === "google_sheets") { if (!cfg.google) throw new IntegrationError("unknown"); tokens = await googleRefresh(cfg.google, refresh, opts); }
+    else { if (!cfg.microsoft) throw new IntegrationError("unknown"); tokens = await microsoftRefresh(cfg.microsoft, refresh, opts); }
   } catch (e) {
     if (e instanceof IntegrationError && e.code === "auth_expired") await markNeedsReauth(admin, conn);
     throw e;

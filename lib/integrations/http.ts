@@ -52,6 +52,9 @@ export interface FetchOptions {
   idempotent: boolean;
   timeoutMs?: number;
   maxAttempts?: number;
+  /** Absolute time (Date.now() ms) by which the whole call, retries and waits included, must be finished. Lets a route that has a
+   *  maxDuration stop cleanly with a "timeout" / "rate_limited" error instead of being killed by the platform half-way through a sync. */
+  deadlineAt?: number;
   sleep?: (ms: number) => Promise<void>;
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
 }
@@ -67,6 +70,8 @@ function retryAfterMs(res: Response, attempt: number): number {
   return Number.isFinite(secs) && secs >= 0 ? Math.min(secs, 30) * 1000 : backoff(attempt);
 }
 
+// The caller keeps its timeout timer running while this reads, so a response whose headers arrive and whose body then hangs is
+// aborted too. A body that cannot be read (aborted, cut off, not JSON) is "no JSON": the status code alone decides what happens next.
 async function readBody(res: Response): Promise<any> {
   try {
     const text = await res.text();
@@ -85,25 +90,42 @@ export async function providerFetch(url: string, init: RequestInit = {}, opts: F
   const maxAttempts = opts.maxAttempts ?? 3;
   const sleep = opts.sleep ?? defaultSleep;
   const doFetch = opts.fetchImpl ?? ((u: string, i: RequestInit) => fetch(u, i));
+  const left = () => (opts.deadlineAt === undefined ? Infinity : opts.deadlineAt - Date.now());
+  // Waiting is only allowed when the deadline still leaves room for the wait AND a real attempt afterwards.
+  const canWait = (ms: number) => left() > ms + 1_000;
+
   for (let attempt = 1; ; attempt++) {
+    const budget = Math.min(opts.timeoutMs ?? 25_000, left());
+    if (budget <= 0) throw new IntegrationError("timeout");
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 25_000);
+    // One timer covers the request AND the reading of the body; it is cleared only when the body is done.
+    const timer = setTimeout(() => controller.abort(), budget);
     let res: Response;
+    let body: any;
     try {
-      res = await doFetch(url, { ...init, signal: controller.signal });
-    } catch (e) {
+      try {
+        res = await doFetch(url, { ...init, signal: controller.signal });
+      } catch (e) {
+        const aborted = (e as { name?: string } | null)?.name === "AbortError";
+        const err = new IntegrationError(aborted ? "timeout" : "network");
+        if (!opts.idempotent || attempt >= maxAttempts) throw err;
+        const wait = backoff(attempt);
+        if (!canWait(wait)) throw err;
+        await sleep(wait);
+        continue;
+      }
+      body = await readBody(res);
+    } finally {
       clearTimeout(timer);
-      const aborted = (e as { name?: string } | null)?.name === "AbortError";
-      const err = new IntegrationError(aborted ? "timeout" : "network");
-      if (!opts.idempotent || attempt >= maxAttempts) throw err;
-      await sleep(backoff(attempt));
-      continue;
     }
-    clearTimeout(timer);
-    if (res.status >= 200 && res.status < 300) return { status: res.status, json: await readBody(res), headers: res.headers };
-    if (res.status === 429 && attempt < maxAttempts) { await sleep(retryAfterMs(res, attempt)); continue; }
-    if (res.status >= 500 && opts.idempotent && attempt < maxAttempts) { await sleep(backoff(attempt)); continue; }
-    const body = await readBody(res);
+    if (res.status >= 200 && res.status < 300) return { status: res.status, json: body, headers: res.headers };
+    if (res.status === 429 && attempt < maxAttempts) {
+      const wait = retryAfterMs(res, attempt);
+      if (canWait(wait)) { await sleep(wait); continue; }
+    } else if (res.status >= 500 && opts.idempotent && attempt < maxAttempts) {
+      const wait = backoff(attempt);
+      if (canWait(wait)) { await sleep(wait); continue; }
+    }
     throw new IntegrationError(classifyStatus(res.status), res.status, providerCode(body));
   }
 }

@@ -1,6 +1,7 @@
 // Which verified-invoice fields go to which spreadsheet column, and how a row is built. No network, no secrets:
 // this file is also used by the browser (column-mapping screen) and by the Tally exporter (duplicate key).
 import { INVOICE_COLUMNS } from "../export/columns.ts";
+import { normalizeInvoiceNumber } from "../extraction/invoice-number.ts";
 import type { CellValue, ExportInvoice, InvoiceColumn } from "../export/columns.ts";
 
 export interface MappingEntry { header: string; field: string | null } // field null = a column AI Asis leaves empty
@@ -112,13 +113,17 @@ function financialYear(date: string | null): string {
   const start = Number(m[2]) >= 4 ? y : y - 1;
   return `${start}-${String((start + 1) % 100).padStart(2, "0")}`;
 }
-// Supplier (GSTIN, or the name when there is none) + invoice number + Indian financial year. null = no number, no key.
+// Supplier + invoice number + Indian financial year. null = no number, no key.
+//  * The number goes through the SAME normalizer as the database duplicate check (normalizeInvoiceNumber).
+//  * The supplier is identified by NAME first and by GSTIN only when there is no name. A misread GSTIN (one wrong character) used to
+//    give the same invoice a different key, so the duplicate was missed. The trade-off: two different suppliers whose normalized
+//    names are identical and who print the same invoice number in the same year would be treated as one. Review shows both anyway.
 export function dedupeKey(inv: Pick<ExportInvoice, "vendor_name" | "vendor_gstin" | "invoice_number" | "invoice_date">): string | null {
-  const number = (inv.invoice_number ?? "").replace(/\s+/g, "").toUpperCase();
+  const number = normalizeInvoiceNumber(inv.invoice_number ?? "");
   if (!number) return null;
   const gstin = (inv.vendor_gstin ?? "").replace(/\s+/g, "").toUpperCase();
   const name = (inv.vendor_name ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-  return `${gstin || name}|${number}|${financialYear(inv.invoice_date)}`.slice(0, 300);
+  return `${name || gstin}|${number}|${financialYear(inv.invoice_date)}`.slice(0, 300);
 }
 
 // ---- spreadsheet links and A1 notation ----
