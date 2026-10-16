@@ -21,7 +21,12 @@ const SYNCS_PER_MINUTE = 100; // invoice rows touched per firm per minute, acros
 // Sends VERIFIED invoices to the connected sheet. Body: { invoiceIds?: string[] }. Without ids, the oldest verified invoices
 // that are not in this sheet yet are sent (up to 25 per run; run again for more). Failed rows are retried by running it again:
 // the ledger and the sheet's AI Asis ID column make that safe.
+// Everything that talks to the provider must be finished (or failed cleanly) before this, so the 60 s platform limit never cuts a sync
+// in the middle. The rest of maxDuration is left for writing the results to the ledger.
+const PROVIDER_BUDGET_MS = 48_000;
+
 export async function POST(request: Request, { params }: { params: { id: string } }) {
+  const deadlineAt = Date.now() + PROVIDER_BUDGET_MS;
   const ctx = await managerWithConnection(request, params.id, true);
   if (!ctx.ok) return ctx.response;
   const { g, admin, conn } = ctx;
@@ -68,10 +73,10 @@ export async function POST(request: Request, { params }: { params: { id: string 
 
   let firstFailure: { code: string; message: string } | null = null;
   try {
-    const token = await getAccessToken(admin, conn);
+    const token = await getAccessToken(admin, conn, { deadlineAt });
     const driver: SheetDriver = conn.provider === "google_sheets"
-      ? googleDriver(token, tgt.spreadsheetId as string, tgt.worksheetTitle as string)
-      : microsoftDriver(token, { itemId: tgt.itemId as string, worksheetId: tgt.worksheetId as string, tableId: typeof tgt.tableId === "string" ? tgt.tableId : null });
+      ? googleDriver(token, tgt.spreadsheetId as string, tgt.worksheetTitle as string, { deadlineAt })
+      : microsoftDriver(token, { itemId: tgt.itemId as string, worksheetId: tgt.worksheetId as string, tableId: typeof tgt.tableId === "string" ? tgt.tableId : null }, { deadlineAt });
     const ledger = makeLedger(admin, conn, (code, message) => { firstFailure ??= { code, message }; });
     const results = await syncInvoices({ invoices, mapping: mapping.mapping, dateFormat: conn.date_format, driver, ledger });
 
