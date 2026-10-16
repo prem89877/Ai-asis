@@ -27,7 +27,7 @@ test("state helpers", () => {
   assert.equal(stateCodeFromPlace("Maharashtra (27)"), "27");
   assert.equal(stateCodeFromPlace("29-Karnataka"), "29");
   assert.equal(stateCodeFromPlace("Tamil Nadu"), "33");
-  assert.equal(stateCodeFromPlace("Andhra Pradesh"), "28"); // ambiguous names resolve to a code; an explicit code wins when printed
+  assert.equal(stateCodeFromPlace("Andhra Pradesh"), "37"); // the name means the current state (37); old code 28 only when printed
   assert.equal(stateCodeFromPlace("37 - Andhra Pradesh"), "37");
   assert.equal(stateCodeFromPlace("Pondicherry"), "34");
   assert.equal(stateCodeFromPlace("somewhere"), null);
