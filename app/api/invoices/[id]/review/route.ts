@@ -8,7 +8,7 @@ import { duplicateFlag } from "@/lib/extraction/pipeline";
 import { createSupabaseStore } from "@/lib/extraction/store";
 import type { FieldMeta, ReviewFlag, StoredItem } from "@/lib/extraction/types";
 import { applyReview } from "@/lib/review/apply";
-import { HEADER_COLUMNS, ITEM_FIELDS } from "@/lib/review/fields";
+import { HEADER_COLUMNS, ITEM_FIELDS, NUMERIC_HEADER_COLUMNS } from "@/lib/review/fields";
 import type { HeaderValues } from "@/lib/review/fields";
 import { computeReviewFlags, hasOpenFlags, toStoredExtracted } from "@/lib/review/flags";
 import { parseReviewInput } from "@/lib/review/input";
@@ -74,18 +74,13 @@ export async function PUT(request: Request, { params }: { params: { id: string }
   const currentHeader = {} as HeaderValues;
   for (const col of HEADER_COLUMNS) {
     const v = row[col];
-    currentHeader[col] = ["taxable_amount", "discount_amount", "cgst_amount", "sgst_amount", "utgst_amount", "igst_amount", "cess_amount", "total_amount"].includes(col)
+    currentHeader[col] = NUMERIC_HEADER_COLUMNS.includes(col)
       ? numOrNull(v)
       : ((v as string | null) ?? null);
   }
-  // Values the review screen does not edit but the GST checks need. Taken from the saved record, never from the browser.
+  // Values the review screen does not edit but the GST checks need (IRN, ack no, e-way bill no). Taken from the saved record, never from
+  // the browser. TCS, TDS, pre-tax charges, round-off, net payable and the exchange rate are editable now and travel in the header.
   const extras = {
-    exchange_rate: numOrNull(row.exchange_rate),
-    tcs_amount: numOrNull(row.tcs_amount),
-    tds_amount: numOrNull(row.tds_amount),
-    pre_tax_charges: numOrNull(row.pre_tax_charges),
-    round_off_amount: numOrNull(row.round_off_amount),
-    net_payable_amount: numOrNull(row.net_payable_amount),
     irn: (row.irn as string | null) ?? null,
     ack_no: (row.ack_no as string | null) ?? null,
     eway_bill_no: (row.eway_bill_no as string | null) ?? null,
