@@ -8,7 +8,7 @@ interface Skipped { invoiceId: string; invoiceNumber: string | null; reason: str
 // EXPERIMENTAL. Available by default; hidden only when the server has TALLY_EXPORT_ENABLED=false. Nothing is sent to Tally: it downloads a file.
 export function TallyPanel({ available }: { available: boolean }) {
   const [format, setFormat] = useState<"xml" | "json" | "csv">("xml");
-  const [cfg, setCfg] = useState({ voucherType: "Purchase", purchaseLedger: "Purchase", cgstLedger: "Input CGST", sgstLedger: "Input SGST", utgstLedger: "Input UTGST", igstLedger: "Input IGST", cessLedger: "Input Cess", roundOffLedger: "Round Off", companyName: "" });
+  const [cfg, setCfg] = useState({ voucherType: "Purchase", purchaseLedger: "Purchase", cgstLedger: "Input CGST", sgstLedger: "Input SGST", utgstLedger: "Input UTGST", igstLedger: "Input IGST", cessLedger: "Input Cess", roundOffLedger: "Round Off", tcsLedger: "TCS Receivable", chargesLedger: "Freight and Packing", discountLedger: "Discount Received", companyName: "" });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [skipped, setSkipped] = useState<Skipped[]>([]);
@@ -35,7 +35,7 @@ export function TallyPanel({ available }: { available: boolean }) {
   }
 
   const input = "h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm";
-  const labels: [keyof typeof cfg, string][] = [["voucherType", "Voucher type"], ["purchaseLedger", "Purchase ledger"], ["cgstLedger", "CGST ledger"], ["sgstLedger", "SGST ledger"], ["utgstLedger", "UTGST ledger"], ["igstLedger", "IGST ledger"], ["cessLedger", "Cess ledger"], ["roundOffLedger", "Round-off ledger"], ["companyName", "Tally company (optional)"]];
+  const labels: [keyof typeof cfg, string][] = [["voucherType", "Voucher type"], ["purchaseLedger", "Purchase ledger"], ["cgstLedger", "CGST ledger"], ["sgstLedger", "SGST ledger"], ["utgstLedger", "UTGST ledger"], ["igstLedger", "IGST ledger"], ["cessLedger", "Cess ledger"], ["roundOffLedger", "Round-off ledger"], ["tcsLedger", "TCS ledger"], ["chargesLedger", "Freight / packing ledger"], ["discountLedger", "Discount ledger"], ["companyName", "Tally company (optional)"]];
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white shadow-card" aria-labelledby="tally-h">
