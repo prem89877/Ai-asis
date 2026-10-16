@@ -19,8 +19,16 @@ export const MAX_ABS_AMOUNT = 999_999_999_999.99; // numeric(14,2)
 export const MAX_ABS_QUANTITY = 99_999_999_999.999; // numeric(14,3)
 const GST_START = "2017-07-01";
 
+// The ONE rupees -> paise conversion (tax-components.ts and tally/build.ts use it too). Rounds half away from zero on the DECIMAL
+// value, so 1.005 -> 101 and 0.285 -> 29 (plain Math.round(x * 100) gives 100 and 28 because of binary float error) and a credit
+// note rounds exactly like its positive twin (-0.025 -> -3, not -2). A non-finite amount is a bug upstream, so it throws instead of
+// letting NaN / Infinity slip silently through every later comparison.
 export function toPaise(amount: number): number {
-  return Math.round(amount * 100);
+  if (typeof amount !== "number" || !Number.isFinite(amount)) throw new RangeError("toPaise: amount must be a finite number");
+  const abs = Math.abs(amount);
+  const decimal = Math.round(Number(`${abs}e2`)); // "1.005e2" = 100.5 exactly; NaN when the text already has an exponent
+  const paise = Number.isNaN(decimal) ? Math.round(abs * 100) : decimal;
+  return amount < 0 && paise !== 0 ? -paise : paise;
 }
 
 // ---- GSTIN -----------------------------------------------------------------------------------

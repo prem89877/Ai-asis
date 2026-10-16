@@ -13,7 +13,8 @@
 // old row is never double counted and never loses its amount. When BOTH heads are printed they are two separate amounts
 // and both are added. Nothing here ever changes a stored value.
 //
-// Arithmetic is done in integer paise (Math.round(x * 100)), so sums of 2-decimal amounts carry no float noise.
+// Arithmetic is done in integer paise (toPaise() in normalize.ts), so sums of 2-decimal amounts carry no float noise.
+import { toPaise } from "./normalize.ts";
 
 export const MONEY_TOLERANCE_PAISE = 200; // INR 2.00: the documented round-off window (same as ROUND_OFF_MAX_PAISE in gst-engine.ts)
 
@@ -26,7 +27,7 @@ export interface TaxHeadsInput {
   cess_amount?: Amt;
 }
 
-export const paise = (v: Amt): number => (v === null || v === undefined || !Number.isFinite(v) ? 0 : Math.round(v * 100));
+export const paise = (v: Amt): number => (v === null || v === undefined || !Number.isFinite(v) ? 0 : toPaise(v));
 export const known = (v: Amt): v is number => v !== null && v !== undefined;
 
 export interface TaxHeadsPaise {
