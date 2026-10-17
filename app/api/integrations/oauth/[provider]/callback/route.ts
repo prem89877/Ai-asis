@@ -6,7 +6,8 @@ import { createClient } from "@/lib/supabase/server";
 import { googleExchangeCode } from "@/lib/integrations/google";
 import { microsoftExchangeCode } from "@/lib/integrations/microsoft";
 import { readIdTokenClaims } from "@/lib/integrations/oauth";
-import { consumeState, isProvider, providerConfigs, saveConnectionTokens } from "@/lib/integrations/store";
+import { DEFAULT_ZOHO_REGION, isZohoRegion, zohoExchangeCode } from "@/lib/integrations/zoho";
+import { consumeState, isOAuthProvider, isZohoProvider, providerConfigs, saveConnectionTokens } from "@/lib/integrations/store";
 import { userMessage } from "@/lib/integrations/http";
 
 export const runtime = "nodejs";
@@ -21,7 +22,7 @@ function back(params: Record<string, string>): NextResponse {
 // OAuth redirect target. Security checks: the single-use state must exist, be unexpired, and belong to THIS signed-in user,
 // provider and firm; the code is exchanged with the PKCE verifier stored server-side.
 export async function GET(request: Request, { params }: { params: { provider: string } }) {
-  if (!isProvider(params.provider)) return back({ error: "unknown_provider" });
+  if (!isOAuthProvider(params.provider)) return back({ error: "unknown_provider" });
   const url = new URL(request.url);
   if (url.searchParams.get("error")) return back({ error: "access_denied" }); // user pressed Cancel or the provider refused
   const code = url.searchParams.get("code");
@@ -41,11 +42,16 @@ export async function GET(request: Request, { params }: { params: { provider: st
 
   try {
     const cfg = providerConfigs();
+    const region = isZohoRegion(st.region) ? st.region : DEFAULT_ZOHO_REGION;
+    const zc = params.provider === "zoho_sheet" ? cfg.zohoSheet : cfg.zohoBooks;
+    if (isZohoProvider(params.provider) && !zc) return back({ error: "not_configured" });
     const tokens = params.provider === "google_sheets"
       ? await googleExchangeCode(cfg.google!, code, st.verifier)
-      : await microsoftExchangeCode(cfg.microsoft!, code, st.verifier);
+      : params.provider === "microsoft_excel"
+        ? await microsoftExchangeCode(cfg.microsoft!, code, st.verifier)
+        : await zohoExchangeCode(zc!, region, code);
     if (!tokens.refreshToken) return back({ error: "no_refresh_token" });
-    const ok = await saveConnectionTokens(admin, { firmId: st.firmId, userId: user.id, provider: params.provider, email: readIdTokenClaims(tokens.idToken).email, tokens });
+    const ok = await saveConnectionTokens(admin, { firmId: st.firmId, userId: user.id, provider: params.provider, email: readIdTokenClaims(tokens.idToken).email, tokens, region: isZohoProvider(params.provider) ? region : null });
     return ok ? back({ connected: params.provider }) : back({ error: "save_failed" });
   } catch (e) {
     console.error("oauth_callback_failed", { provider: params.provider, code: userMessage(e).code });
