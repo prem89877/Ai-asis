@@ -14,7 +14,7 @@ export default async function IntegrationsPage() {
       <DashboardSidebar current="integrations" />
       <main className="p-4 sm:p-6 lg:p-8">
         <h1 className="text-2xl font-bold tracking-tight">Integrations</h1>
-        <p className="mt-1 text-sm text-ink-muted">Send verified invoices to Google Sheets or Excel Online, and prepare accounting exports.</p>
+        <p className="mt-1 text-sm text-ink-muted">Send verified invoices to Google Sheets, Excel Online or Zoho Sheet, create purchase bills in Zoho Books, post vouchers to TallyPrime, and prepare accounting exports.</p>
         <div className="mt-6">
           {membership ? (
             <IntegrationsClient />
