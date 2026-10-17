@@ -7,8 +7,15 @@ import { googleDriver } from "@/lib/integrations/google";
 import { IntegrationError, userMessage } from "@/lib/integrations/http";
 import { validateMapping } from "@/lib/integrations/mapping";
 import { microsoftDriver } from "@/lib/integrations/microsoft";
+import { booksPusher } from "@/lib/integrations/books";
+import { MAX_PUSH_PER_RUN, pushInvoices } from "@/lib/integrations/push-sync";
+import type { Pusher } from "@/lib/integrations/push-sync";
+import { tallyPusher, validateTallyUrl } from "@/lib/integrations/tally-push";
+import { booksTaxes, DEFAULT_ZOHO_REGION, isZohoRegion, zohoSheetDriver } from "@/lib/integrations/zoho";
+import { validateTallyConfig } from "@/lib/tally/build";
+import type { ExportItem } from "@/lib/export/columns";
 import { managerWithConnection, providerError } from "@/lib/integrations/route-helpers";
-import { getAccessToken, makeLedger, markNeedsReauth, recordConnectionError } from "@/lib/integrations/store";
+import { getAccessToken, makeLedger, markNeedsReauth, readTallySecret, recordConnectionError } from "@/lib/integrations/store";
 import { MAX_INVOICES_PER_SYNC, syncInvoices } from "@/lib/integrations/sync";
 import type { SheetDriver } from "@/lib/integrations/sync";
 
@@ -39,8 +46,15 @@ export async function POST(request: Request, { params }: { params: { id: string 
   if (conn.status !== "active") return json({ error: "Reconnect your account first.", code: "auth_expired" }, 409);
   const mapping = validateMapping(conn.mapping);
   const tgt = conn.target as Record<string, unknown>;
-  const configured = conn.provider === "google_sheets" ? typeof tgt.spreadsheetId === "string" && typeof tgt.worksheetTitle === "string" : typeof tgt.itemId === "string" && typeof tgt.worksheetId === "string";
-  if (!configured || !mapping.ok) return json({ error: "Choose a file and map the columns before syncing." }, 409);
+  // Zoho Books and TallyPrime send one bill / voucher per invoice (no spreadsheet, no column mapping).
+  const push = conn.provider === "zoho_books" || conn.provider === "tally_prime";
+  const configured = conn.provider === "google_sheets" ? typeof tgt.spreadsheetId === "string" && typeof tgt.worksheetTitle === "string"
+    : conn.provider === "microsoft_excel" ? typeof tgt.itemId === "string" && typeof tgt.worksheetId === "string"
+    : conn.provider === "zoho_sheet" ? typeof tgt.resourceId === "string" && typeof tgt.worksheetName === "string"
+    : conn.provider === "zoho_books" ? typeof tgt.orgId === "string" && typeof tgt.accountId === "string"
+    : validateTallyConfig(tgt.config).ok;
+  if (!configured || (!push && !mapping.ok)) return json({ error: push ? "Finish the setup of this connection before syncing." : "Choose a file and map the columns before syncing." }, 409);
+  const maxInvoices = push ? MAX_PUSH_PER_RUN : MAX_INVOICES_PER_SYNC;
 
   const since = new Date(Date.now() - 60_000).toISOString();
   const { count: recent } = await g.supabase.from("sync_records").select("id", { count: "exact", head: true }).eq("firm_id", firmId).gte("updated_at", since);
@@ -50,8 +64,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
   let ids: string[];
   if (b.invoiceIds !== undefined) {
     const raw = b.invoiceIds;
-    if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_INVOICES_PER_SYNC || !raw.every((v) => typeof v === "string" && UUID_RE.test(v))) {
-      return json({ error: `Select between 1 and ${MAX_INVOICES_PER_SYNC} invoices.` }, 400);
+    if (!Array.isArray(raw) || raw.length === 0 || raw.length > maxInvoices || !raw.every((v) => typeof v === "string" && UUID_RE.test(v))) {
+      return json({ error: `Select between 1 and ${maxInvoices} invoices.` }, 400);
     }
     ids = Array.from(new Set(raw as string[]));
   } else {
@@ -63,7 +77,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
       const { data } = await g.supabase.from("sync_records").select("invoice_id").eq("firm_id", firmId).eq("connection_id", conn.id).eq("status", "synced").in("invoice_id", all.slice(i, i + CHUNK));
       for (const r of (data ?? []) as { invoice_id: string }[]) done.add(r.invoice_id);
     }
-    ids = all.filter((id) => !done.has(id)).slice(0, MAX_INVOICES_PER_SYNC);
+    ids = all.filter((id) => !done.has(id)).slice(0, maxInvoices);
   }
   if (ids.length === 0) return json({ results: [], summary: { total: 0 }, message: "Nothing to sync: every verified invoice is already in the sheet." });
 
@@ -73,12 +87,40 @@ export async function POST(request: Request, { params }: { params: { id: string 
 
   let firstFailure: { code: string; message: string } | null = null;
   try {
+    if (push) {
+      const ledger = makeLedger(admin, conn, (code, message) => { firstFailure ??= { code, message }; });
+      let pusher: Pusher;
+      if (conn.provider === "tally_prime") {
+        const secret = readTallySecret(conn);
+        const u = secret ? validateTallyUrl(secret.url) : null;
+        const cfg = validateTallyConfig(tgt.config);
+        if (!secret || !u?.ok || !cfg.ok) return json({ error: "The Tally connection must be set up again.", code: "auth_expired" }, 409);
+        pusher = tallyPusher({ url: u.url, token: secret.token, config: cfg.config });
+      } else {
+        const region = isZohoRegion(conn.region) ? conn.region : DEFAULT_ZOHO_REGION;
+        const token = await getAccessToken(admin, conn, { deadlineAt });
+        const orgId = tgt.orgId as string;
+        const items = new Map<string, ExportItem[]>();
+        const { data: lines, error: lErr } = await g.supabase.from("line_items").select("invoice_id, position, description, hsn_code, quantity, unit, unit_price, discount_amount, taxable_amount, gst_rate, gst_amount, line_total").eq("firm_id", firmId).in("invoice_id", ids).order("position", { ascending: true });
+        if (lErr) return json({ error: "Invoice lines could not be loaded." }, 500);
+        for (const it of (lines ?? []) as unknown as ExportItem[]) { const l = items.get(it.invoice_id); if (l) l.push(it); else items.set(it.invoice_id, [it]); }
+        pusher = booksPusher({ token, region, orgId, accountId: tgt.accountId as string, taxes: await booksTaxes(token, region, orgId, { deadlineAt }), items, opts: { deadlineAt } });
+      }
+      const results = await pushInvoices({ invoices, pusher, ledger });
+      const failure = firstFailure as { code: string; message: string } | null;
+      if (failure?.code === "auth_expired") await markNeedsReauth(admin, conn);
+      else if (failure) await recordConnectionError(admin, conn, failure.message);
+      const n = (st: string) => results.filter((r) => r.status === st).length;
+      return json({ results, summary: { total: results.length, synced: n("synced") + n("recovered"), already: n("already_synced"), duplicates: n("duplicate"), notVerified: n("not_verified"), inProgress: n("in_progress"), failed: n("failed") } });
+    }
     const token = await getAccessToken(admin, conn, { deadlineAt });
     const driver: SheetDriver = conn.provider === "google_sheets"
       ? googleDriver(token, tgt.spreadsheetId as string, tgt.worksheetTitle as string, { deadlineAt })
+      : conn.provider === "zoho_sheet"
+      ? zohoSheetDriver(token, isZohoRegion(conn.region) ? conn.region : DEFAULT_ZOHO_REGION, tgt.resourceId as string, tgt.worksheetName as string, { deadlineAt })
       : microsoftDriver(token, { itemId: tgt.itemId as string, worksheetId: tgt.worksheetId as string, tableId: typeof tgt.tableId === "string" ? tgt.tableId : null }, { deadlineAt });
     const ledger = makeLedger(admin, conn, (code, message) => { firstFailure ??= { code, message }; });
-    const results = await syncInvoices({ invoices, mapping: mapping.mapping, dateFormat: conn.date_format, driver, ledger });
+    const results = await syncInvoices({ invoices, mapping: mapping.ok ? mapping.mapping : [], dateFormat: conn.date_format, driver, ledger });
 
     const failure = firstFailure as { code: string; message: string } | null;
     if (failure?.code === "auth_expired") await markNeedsReauth(admin, conn);
