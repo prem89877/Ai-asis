@@ -4,7 +4,9 @@ import { googleCreateSpreadsheet, googleDriver, googleGetSpreadsheet } from "@/l
 import { parseSpreadsheetId } from "@/lib/integrations/mapping";
 import { msGetWorkbookStructure, msReadHeaders, msSearchWorkbooks } from "@/lib/integrations/microsoft";
 import { managerWithConnection, providerError } from "@/lib/integrations/route-helpers";
-import { getAccessToken } from "@/lib/integrations/store";
+import { getAccessToken, readTallySecret } from "@/lib/integrations/store";
+import { booksExpenseAccounts, booksOrganizations, DEFAULT_ZOHO_REGION, isZohoRegion, parseZohoSheetId, zohoSheetDriver, zohoSheetWorksheets } from "@/lib/integrations/zoho";
+import { companiesRequestXml, parseCompanies, postToTally, validateTallyUrl } from "@/lib/integrations/tally-push";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,7 +26,40 @@ export async function POST(request: Request, { params }: { params: { id: string 
   if (!b || typeof b !== "object" || Array.isArray(b)) return json({ error: "Invalid request." }, 400);
 
   try {
+    // TallyPrime: "test" asks Tally for its open companies (creates nothing).
+    if (conn.provider === "tally_prime") {
+      if (b.action !== "test") return json({ error: "Unknown action." }, 400);
+      const secret = readTallySecret(conn);
+      const u = secret ? validateTallyUrl(secret.url) : null;
+      if (!secret || !u?.ok) return json({ error: "The Tally connection must be set up again." }, 409);
+      return json({ companies: parseCompanies(await postToTally(u.url, secret.token, companiesRequestXml())) });
+    }
     const token = await getAccessToken(admin, conn);
+    const zRegion = isZohoRegion(conn.region) ? conn.region : DEFAULT_ZOHO_REGION;
+
+    if (conn.provider === "zoho_sheet") {
+      if (b.action === "open") {
+        const id = typeof b.input === "string" ? parseZohoSheetId(b.input) : null;
+        if (!id) return json({ error: "Paste the full link of the Zoho Sheet workbook (https://sheet.zoho.in/sheet/open/...)." }, 400);
+        return json({ resourceId: id, worksheets: await zohoSheetWorksheets(token, zRegion, id) });
+      }
+      if (b.action === "headers") {
+        const id = typeof b.resourceId === "string" ? parseZohoSheetId(b.resourceId) : null;
+        const ws = typeof b.worksheetName === "string" && b.worksheetName.length <= 255 ? b.worksheetName : null;
+        if (!id || !ws) return json({ error: "Choose a workbook and a worksheet." }, 400);
+        return json({ headers: await zohoSheetDriver(token, zRegion, id, ws).readHeaders() });
+      }
+      return json({ error: "Unknown action." }, 400);
+    }
+    if (conn.provider === "zoho_books") {
+      if (b.action === "organizations") return json({ organizations: await booksOrganizations(token, zRegion) });
+      if (b.action === "accounts") {
+        const orgId = typeof b.orgId === "string" && /^\d{4,30}$/.test(b.orgId) ? b.orgId : null;
+        if (!orgId) return json({ error: "Choose an organisation." }, 400);
+        return json({ accounts: await booksExpenseAccounts(token, zRegion, orgId) });
+      }
+      return json({ error: "Unknown action." }, 400);
+    }
 
     if (conn.provider === "google_sheets") {
       if (b.action === "open") {
