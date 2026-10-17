@@ -52,3 +52,7 @@ Suspicious values only are re-read from the original file, judged in code, corre
 
 ## Accuracy evaluation and final integration check
 End-to-end tests of the fixed reading prompt, structured extraction and source verification working together, an offline baseline-vs-updated evaluation (`npm run eval:pipeline`) and a live mode for measuring real accuracy, latency and cost. Results, limits and Vercel deployment steps: `docs/ACCURACY_EVALUATION.md`. No new environment variables.
+
+
+## Integrations
+Google Sheets, Microsoft Excel Online, Zoho Sheet, Zoho Books and TallyPrime: see `docs/PHASE6_PART1_SETUP.md` and `docs/PHASE7_INTEGRATIONS_SETUP.md`.
